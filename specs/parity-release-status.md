@@ -1,10 +1,49 @@
 # NaturalPoint compatibility release status
 
-**The current x64 candidate is `640722a`, SHA-256 `C1CA014CE3B0DD79F39878F817F9F5D7C3DB7CF5B5BBC983E48D6428D2959EF2`.** Cancelling a staged Bedroom profile reset now restores the toolbar position where Setup opened. The regression reproduced a 980-pixel jump on the previous build. All 24 isolated Windows tests passed after the fix. Native presentation qualification now checks the actual toolbar bounds after Move, Setup, Bedroom profile and Cancel.
+**The eight-hour Windows release gate remains open.** Candidate `7777b33` moves the drag worker round trip off the toolbar thread. The worker checks the Windows left-button state before acknowledging a release. If the pipe fails, the toolbar closes the command stream and waits for that worker to finish before trying its fallback. Pause still preserves a held drag, and Resume retains its target and dwell settings.
 
-The same application source also passed on a real Windows 11 ARM64 runner (build 26200) and a Windows Server x64 runner (build 26100). Each ran all 24 isolated tests and delivered the expected receiver events on both input backends. Forced termination of the toolbar released the held drag and cleared the Windows left-button state in all four native runs. The retained ARM64 bundle has executable SHA-256 `0D19D9BAE04795A2FFF7E0C341613575F93F64E30F4CFC0C2A89FE43FC95E726`. The independently built hosted x64 executable was `DEE700B4EB14950F4682551CB2B47AD1939DB2014118BB90AA30E1522B9FB4D9`. [Windows release checks and receipts](https://github.com/melfahn/HoverPulse/actions/runs/45060632776)
+The two historical runs establish that the receiver missed the drop deadline. The newer run also establishes that the toolbar expanded again, Windows still held the button when sampled, and a control-text request timed out. Those files end before any pre-cleanup follow-up observation. The original worker protocol could block the toolbar thread for two seconds waiting for an acknowledgment. A deterministic private-desktop test delays the reply on both backends, queries the toolbar during the wait and checks that closing waits for that same release. Both cases failed when the synchronous toolbar wait was restored in a reproduction worktree. A separate worker test simulates an input API reporting success while the button remains down. The historical traces lack the worker and toolbar timestamps needed to establish the cause.
 
-**The eight-hour release gate remains open.** Two earlier builds missed a drag release after Resume. The settings fix does not change drag dispatch. Diagnose the missed release, then repeat the native recovery checks and uninterrupted soak on the exact release executable.
+The endurance runner saves the partial cycle, button state, toolbar responsiveness, control text and screenshot before recovery. It holds the failed drop target in place for three more seconds so it can timestamp late native edges separately from any later fixture release. It resumes diagnostic cycles only after retiring the candidate and its worker and verifying the input desktop, button state and a clean receiver click from the exact restarted executable. A missed edge fails qualification even when diagnostics continue through the full elapsed window. The test stops synthetic input if it cannot verify safe recovery.
+
+## Hosted qualification of `7777b33`
+
+| Architecture | Windows build | HoverPulse.exe SHA-256 |
+|---|---|---|
+| x64 | 26100 | `E526B14A4BCF3D8BF3A9FC7109B2037E6080A34412FAE2B25DFE3ED4CF9AAEFC` |
+| ARM64 | 26200 | `B286CBABAB6DAE299A92CEEC5230ABB2FA019AB364D42000EC25D605AB5B901A` |
+
+Both architectures passed 28 isolated tests. Both backends delivered the expected native receiver sequence with the 1.2-second and seven-second drag holds and released the held button on orderly and forced toolbar exit. In the eight normal native drops, the receiver saw left-up 348–434 ms after target placement, and toolbar dispatch completed in 2.8–4.5 ms. The runner verified Windows left-up in each case. [Hosted Windows runs and build manifests](https://github.com/melfahn/HoverPulse/actions/runs/45083233127)
+
+Each architecture also completed a deliberately shortened deadline run with two failed cycles and two verified restarts. The four native left-ups arrived 322–358 ms after the shortened deadline, before recovery began. Each run retained the failed verdict and the original partial cycles. The exact bundles, fixtures and independent receipt audit are staged under `artifacts/verification/drag-release-7777b33`.
+
+## Exact-build qualification in the next reserved Windows window
+
+Use the complete hosted-tested publish directory and its `build.json` for the target architecture. Verify every manifest entry after copying. Stage the complete `tests/WindowsRelease` directory from the same candidate commit, including `DeliveryCycles.ps1`, and provide the separately maintained host and account allowlist described below. Use a fresh output directory and a clean dedicated test profile for each run. Reserve enough time for native preflight and the full unattended eight-hour interval.
+
+Qualify both backends with separate `-CheckOrderlyExit` and `-CheckForcedExit` runs and a `-DragHoldMilliseconds 7000` hold. Repeat the presentation, restored profile, DPI movement, restricted-input, lock/unlock, suspend/resume, reconnect and display-removal checks described below. Keep their receipts separate from endurance. Run the legacy backend overnight because both historical misses used it. Keep the session and its input desktop available for the entire interval.
+
+```powershell
+$build = Get-Content -LiteralPath $buildManifest -Raw | ConvertFrom-Json
+$exeHash = ($build.Files | Where-Object Name -eq HoverPulse.exe).SHA256
+foreach ($file in $build.Files) {
+    if ((Get-FileHash -LiteralPath (Join-Path $publishDirectory $file.Name)).Hash -ne $file.SHA256) {
+        throw "Bundle hash mismatch for $($file.Name)"
+    }
+}
+& (Join-Path $fixtureDirectory 'Test-GuestDelivery.ps1') `
+    -TestComputerName $reservedHost -DedicatedTestAccount $reservedIdentity `
+    -Product Candidate -Executable (Join-Path $publishDirectory 'HoverPulse.exe') `
+    -ExpectedSHA256 $exeHash -OutputDirectory $freshOutputDirectory -TraceDrag -SoakHours 8
+```
+
+The receipt must show the exact executable hash, a passed result, a completed soak of at least 28,800 seconds, zero failed cycles and zero restarts. Retain `events.txt`, `receiver-drag.log`, `qpc-frequency.txt`, the toolbar and worker `drag-*.log` files, `resource-samples.csv` and `delivery.json`. A `failure-00001` directory identifies the first failed cycle. Use its partial trace, `late-observation.json` and `recovery.json` to distinguish input delivered late, input released during process retirement and any separately recorded fixture release.
+
+## Previous settings candidate
+
+Build `640722a`, x64 SHA-256 `C1CA014CE3B0DD79F39878F817F9F5D7C3DB7CF5B5BBC983E48D6428D2959EF2`, restored the toolbar position where Setup opened after cancelling a staged Bedroom profile reset. The regression reproduced a 980-pixel jump on the previous build. All 24 isolated Windows tests passed after the fix. Native presentation qualification checks the actual toolbar bounds after Move, Setup, Bedroom profile and Cancel.
+
+The same application source passed on Windows 11 ARM64 (build 26200) and Windows Server x64 (build 26100). Each ran all 24 isolated tests and delivered the expected receiver events on both backends. Forced termination of the toolbar released the held drag and cleared the Windows left-button state in all four native runs. The retained ARM64 executable hash was `0D19D9BAE04795A2FFF7E0C341613575F93F64E30F4CFC0C2A89FE43FC95E726`. The hosted x64 hash was `DEE700B4EB14950F4682551CB2B47AD1939DB2014118BB90AA30E1522B9FB4D9`. [Windows release checks and receipts](https://github.com/melfahn/HoverPulse/actions/runs/45060632776)
 
 ## Previous candidate endurance result
 
@@ -54,7 +93,7 @@ In one matched four-run comparison the first edge reached the receiver 386–450
 
 Use separate clean snapshots of the same disposable, interactive Windows guest. Copy the complete candidate publish directory, the signed reference executable and the receiver and PowerShell scripts under `tests/WindowsRelease`. Run the PowerShell test within the guest for the reference and then the candidate, for each backend. Provide the verified guest hostname to `-DisposableGuestName`, `-Product Reference` or `Candidate`, the matching `-Executable` and a fresh `-OutputDirectory`. Add `-Alternate` for SendInput. The runner creates the corresponding test-user profile and refuses to overwrite an existing one. It checks target visibility, records button edges at the receiving window and writes a receipt on completion or failure.
 
-Compare event order, target-relative coordinates and inter-edge intervals in the two event logs. Compare timing distributions across repeated runs at the same DPI, refresh and desktop load. Run the candidate with `-SoakHours 8` in an uninterrupted guest console after differential smoke passes. The accelerated detector test measures logical coverage only. Repeat on supported platforms and retain guest, architecture, DPI, Windows build and profiles alongside receipts.
+Compare event order, target-relative coordinates and inter-edge intervals in the two event logs. Compare timing distributions across repeated runs at the same DPI, refresh and desktop load. Run the candidate with `-SoakHours 8`, `-ExpectedSHA256` and `-TraceDrag` in an uninterrupted guest console after differential smoke passes. The accelerated detector test measures logical coverage only. Repeat on supported platforms and retain guest, architecture, DPI, Windows build and profiles alongside receipts.
 
 For recovery qualification, repeat with an already-running instance, modal settings, interrupted write, active drag at orderly exit and forced termination, restricted target, lock/unlock, sleep/wake, RDP reconnect and removal of the toolbar's monitor. Record receiver-side edges, physical key/button state, reachable resume control and any Windows-imposed restrictions. A missed expected edge, extra click, stuck owned button or unreachable resume blocks release.
 
