@@ -1,6 +1,10 @@
 # NaturalPoint compatibility release status
 
-**The current x64 candidate is `caa0e23`, SHA-256 `A2D5942B2926AD4EEABCD9DE30315FC06119951E2BF2A045462BD400A40D404B`.** It samples the cursor in NaturalPoint's DPI-unaware coordinate space and uses the physical cursor for toolbar targets. All 24 isolated tests passed. The Windows x64 and ARM64 publish directories have per-file manifests. Native results identify their specific build.
+**The current x64 candidate is `640722a`, SHA-256 `C1CA014CE3B0DD79F39878F817F9F5D7C3DB7CF5B5BBC983E48D6428D2959EF2`.** Cancelling a staged Bedroom profile reset now restores the toolbar position where Setup opened. The regression reproduced a 980-pixel jump on the previous build. All 24 isolated Windows tests passed after the fix. Native presentation qualification now checks the actual toolbar bounds after Move, Setup, Bedroom profile and Cancel.
+
+## Previous candidate under endurance test
+
+Build `caa0e23`, x64 SHA-256 `A2D5942B2926AD4EEABCD9DE30315FC06119951E2BF2A045462BD400A40D404B`, samples the cursor in NaturalPoint's DPI-unaware coordinate space and uses the physical cursor for toolbar targets. All 24 isolated tests passed before the profile-reset regression was added. The Windows x64 and ARM64 publish directories have per-file manifests.
 
 On this exact executable, both backends passed ordinary action delivery, duplicate-instance handling, orderly exit during a held drag, forced termination of the toolbar during a held drag, and a seven-second drag hold followed by pause, resume and drop. Actual Windows controls passed all 48 presentation combinations across 96 and 144 DPI. A newly launched process restored the saved position, size, palette, labels and padding.
 
