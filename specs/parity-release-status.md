@@ -4,6 +4,8 @@
 
 The redesigned toolbar passed 23 isolated tests, including real Windows controls for all four sizes, three palettes and both label settings. The tests checked actual control bounds, inert gaps, saved padding, staged Setup and the anchored Resume target. The layout tests also checked 96 and 144 DPI. The earlier native measurements below belong to the previous build.
 
+The exact redesigned x64 executable also passed the full hands-free presentation sequence on Windows 11 at 96 and 144 DPI, independently reported by its live window. All 48 combinations matched the expected physical target coordinates and palette samples. Both runs covered saved and cancelled padding, mode locking, held drag, anchored Resume, Move/Place and confirmed Exit, with zero stray receiver clicks. The x64 candidate also passed an authenticated RDP disconnect and reconnect while paused. Endurance and multi-monitor results are tracked separately.
+
 The previous x64 build (`3F78BA7A…6455`) completed 336 full native endurance cycles before the receiver missed the drop after Resume in the next cycle. The run ended after 4,334 seconds. The last trace shows a drag-down and then a 6.4-second interval before the pointer moved to Pause. The cause is unresolved. This was a failed endurance run. Subsequent qualification captures the toolbar, pointer and Windows button state before cleanup when any phase fails.
 
 | Evidence | Result |
