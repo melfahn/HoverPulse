@@ -174,14 +174,16 @@ public sealed class ReleaseReceiver : Form
     {
         var previous = SetThreadDpiAwarenessContext(new IntPtr(-1));
         if (previous == IntPtr.Zero) throw new InvalidOperationException("Reference coordinate context unavailable.");
-        Point physical, logical;
+        Point logical;
         try
         {
             if (WindowFromPoint(new Point(x,y)) != handle || !SetCursorPos(x,y) ||
-                !GetCursorPos(out logical) || logical.X != x || logical.Y != y || !GetPhysicalCursorPos(out physical))
+                !GetCursorPos(out logical) || logical.X != x || logical.Y != y)
                 throw new InvalidOperationException("Reference-space target or cursor readback differs.");
         }
         finally { RestoreDpi(previous); }
+        Point physical;
+        if (!GetPhysicalCursorPos(out physical)) throw new InvalidOperationException("Physical target readback failed.");
         HoldScreenPoint(handle,physical.X,physical.Y,milliseconds);
     }
 

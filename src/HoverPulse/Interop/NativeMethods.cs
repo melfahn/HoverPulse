@@ -46,10 +46,6 @@ internal static partial class NativeMethods
     internal static partial bool GetCursorPos(out POINT lpPoint);
 
     [LibraryImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool GetPhysicalCursorPos(out POINT point);
-
-    [LibraryImport("user32.dll")]
     internal static partial nint SetThreadDpiAwarenessContext(nint context);
 
     [LibraryImport("user32.dll")]
