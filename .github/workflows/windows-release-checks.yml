@@ -50,6 +50,9 @@ jobs:
             ConvertTo-Json -Depth 4 | Set-Content artifacts/receipts/build.json
       - name: Run the isolated Windows suite
         run: dotnet test tests/HoverPulse.Tests/HoverPulse.Tests.csproj -c Release --arch ($env:RID.Split('-')[1]) --logger "trx;LogFileName=isolated.trx" --results-directory artifacts/receipts
+      - name: Verify endurance failure handling
+        shell: powershell
+        run: ./tests/WindowsRelease/Test-DeliveryCycles.ps1
       - name: Check both click backends on the runner desktop
         shell: powershell
         run: ./tests/WindowsRelease/Invoke-HostedDelivery.ps1

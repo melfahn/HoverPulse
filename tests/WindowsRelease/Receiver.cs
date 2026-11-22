@@ -69,6 +69,7 @@ public sealed class ReleaseReceiver : Form
 
     public void HoldScreenPoint(IntPtr handle, int x, int y, int milliseconds)
     {
+        RequireInputDesktop();
         var actual = WindowFromPoint(new Point(x,y));
         if (actual != handle)
         {
@@ -195,6 +196,7 @@ public sealed class ReleaseReceiver : Form
 
     public void HoldReferencePoint(IntPtr handle, int x, int y, int milliseconds)
     {
+        RequireInputDesktop();
         var previous = SetThreadDpiAwarenessContext(new IntPtr(-1));
         if (previous == IntPtr.Zero) throw new InvalidOperationException("Reference coordinate context unavailable.");
         Point logical;
@@ -222,6 +224,27 @@ public sealed class ReleaseReceiver : Form
         if (WindowFromPoint(new Point(x,y)) != window) throw new InvalidOperationException("Unexpected window at " + x + "," + y);
     }
 
+    public static void RequireInputDesktop()
+    {
+        IntPtr input = OpenInputDesktop(0, false, 1);
+        if (input == IntPtr.Zero) throw new InvalidOperationException("The input desktop is unavailable.");
+        try
+        {
+            if (DesktopName(input) != DesktopName(GetThreadDesktop(GetCurrentThreadId())))
+                throw new InvalidOperationException("The receiver desktop is no longer accepting input.");
+        }
+        finally { CloseDesktop(input); }
+    }
+
+    private static string DesktopName(IntPtr desktop)
+    {
+        var name = new StringBuilder(256);
+        int needed;
+        if (!GetUserObjectInformationW(desktop, 2, name, name.Capacity * 2, out needed))
+            throw new InvalidOperationException("Could not verify the input desktop name.");
+        return name.ToString();
+    }
+
     public static Bitmap CaptureWindow(IntPtr window)
     {
         var bounds = ScreenBounds(window);
@@ -234,6 +257,10 @@ public sealed class ReleaseReceiver : Form
     }
 
     public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
+    public static bool OtherButtonDown()
+    {
+        return GetAsyncKeyState(2) < 0 || GetAsyncKeyState(4) < 0 || GetAsyncKeyState(5) < 0 || GetAsyncKeyState(6) < 0;
+    }
 
     public static string IntegritySid(Process process)
     {
@@ -268,7 +295,9 @@ public sealed class ReleaseReceiver : Form
 
     public void ReleaseTestDrag()
     {
-        if (WindowFromPoint(Cursor.Position) != Handle) throw new InvalidOperationException("Recovery target is occluded.");
+        RequireInputDesktop();
+        if (GetForegroundWindow() != Handle || WindowFromPoint(Cursor.Position) != Handle)
+            throw new InvalidOperationException("The receiver cannot safely accept the recovery release.");
         mouse_event(4, 0, 0, 0, UIntPtr.Zero);
         Pump(200);
         if (LeftDown()) throw new InvalidOperationException("The test button is still held.");
@@ -303,4 +332,10 @@ public sealed class ReleaseReceiver : Form
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
     [DllImport("user32.dll")] static extern bool GetPhysicalCursorPos(out Point point);
+    [DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformationW(
+        IntPtr handle, int index, StringBuilder result, int bytes, out int needed);
 }

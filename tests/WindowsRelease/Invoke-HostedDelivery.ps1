@@ -27,6 +27,23 @@ try {
         if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or $receipt.LeftDownAfterKill -ne $false) { throw "Invalid $backend delivery receipt" }
         Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend")
     }
+    # The captured profile needs several 100 ms samples to drop. A 100 ms deadline
+    # deliberately fails before the native left-up and exercises recovery on this executable.
+    $out = Join-Path $receipts 'short-deadline'
+    $failure = $null
+    try {
+        & (Join-Path $PSScriptRoot 'Test-GuestDelivery.ps1') -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -SoakHours 0.009 -DropDeadlineMilliseconds 100 -TraceDrag
+    } catch { $failure = $_ }
+    if (!$failure) { throw 'The intentionally short deadline should fail qualification.' }
+    $receipt = Get-Content (Join-Path $out 'delivery.json') -Raw | ConvertFrom-Json
+    $late = Get-Content (Join-Path $out 'failure-00001/late-observation.json') -Raw | ConvertFrom-Json
+    $recovery = Get-Content (Join-Path $out 'failure-00001/recovery.json') -Raw | ConvertFrom-Json
+    if ($receipt.SHA256 -ne $hash -or $receipt.Passed -or !$receipt.SoakCompleted -or $receipt.Attempts -lt 2 -or
+        $receipt.FailedCycles -ne $receipt.Attempts -or $receipt.CandidateRestarts -lt 1 -or
+        ($late.Edges -join ',') -ne 'LU' -or $late.LeftDown -or !$recovery.Safe -or $recovery.FixtureReleaseAttempted -or
+        !(Test-Path -LiteralPath (Join-Path $out 'failure-00001/toolbar.png'))) {
+        throw "The short-deadline run did not record a late native release and safely continue. $($failure.Exception.Message)"
+    }
 } catch {
     ($_|Out-String) + $_.ScriptStackTrace | Set-Content (Join-Path $receipts 'hosted-error.txt')
     throw

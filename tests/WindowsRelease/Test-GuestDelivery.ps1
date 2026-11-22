@@ -23,9 +23,11 @@ param(
     [string]$RestrictedPeer,
     [ValidateRange(0,768)][int]$ExpectedDpi = 0,
     [ValidateRange(1200,60000)][int]$DragHoldMilliseconds = 1200,
+    [ValidateRange(100,1200)][int]$DropDeadlineMilliseconds = 1200,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot DeliveryCycles.ps1)
 $computer = Get-CimInstance Win32_ComputerSystem
 if ($computer.Name -ne $TestComputerName) { throw 'Wrong test computer.' }
 $hostFile = Join-Path $PSScriptRoot 'TestHosts.local.psd1'
@@ -65,6 +67,9 @@ $exe = Get-Item -LiteralPath $Executable
 $hash = (Get-FileHash -LiteralPath $exe.FullName).Hash
 if ($ExpectedSHA256 -and $hash -ne $ExpectedSHA256) { throw 'The staged executable differs from the expected build.' }
 $isReference = $Product -eq 'Reference'
+if ($DropDeadlineMilliseconds -ne 1200 -and ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $isReference -or !$SoakHours)) {
+    throw 'An intentionally short drop deadline requires a disposable hosted candidate soak.'
+}
 if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
@@ -103,9 +108,8 @@ if ($isReference) {
 # Screen placement uses physical pixels. Boundary checks request and verify reference-space offsets.
 $previousDpi = [ReleaseReceiver]::EnterPerMonitorDpi()
 $receiver = New-Object ReleaseReceiver
-$receiver.TraceDrag = $TraceDrag.IsPresent
+$receiver.TraceDrag = $TraceDrag.IsPresent -or $SoakHours -gt 0
 $traceVariable = 'HOVERPULSE_DRAG_TRACE_DIRECTORY'
-$dropObservation = $null
 if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
     $receiver.Bounds = if ($CheckMixedDpi -or $CheckMonitorRemoval) { [Windows.Forms.SystemInformation]::VirtualScreen } else { [Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
@@ -114,15 +118,154 @@ $app = $null
 $start = $null
 $passed = $false
 $heldAfterKill = $null
-$cycles = 0
+$endurance = $null
 $registered = $false
+$run = @{App=$null; Window=[IntPtr]::Zero; Phase='startup'; TraceStart=0; TimelineStart=0;
+         Attempts=0; Cycles=0; Failures=0; Restarts=0; Completed=$false; Passed=$false;
+         FailureDir=$null; StopReason=$null; KnownDrag=$false; DragTraceStart=0}
 $timer = [Diagnostics.Stopwatch]::StartNew()
+function Open-TestToolbar {
+    $run.Window = [IntPtr]::Zero
+    $run.App = if ($start) { [Diagnostics.Process]::Start($start) } else { Start-Process -FilePath $exe.FullName -PassThru }
+    $startup = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $run.App.Refresh()
+        if ($run.App.HasExited) { throw "Toolbar exited during startup with code $($run.App.ExitCode)." }
+        if ($startup.Elapsed.TotalSeconds -gt 30) { throw 'Timed out waiting for the visible toolbar.' }
+        [ReleaseReceiver]::Pump(100)
+        $run.Window = if ($isReference) { $run.App.MainWindowHandle } else { [ReleaseReceiver]::CandidateToolbar($run.App.Id) }
+    } until ($run.Window -ne [IntPtr]::Zero)
+}
+function Add-Observation($Record, [string]$Key, [scriptblock]$Read) {
+    try { $Record[$Key] = & $Read }
+    catch { $Record["${Key}Error"] = $_.Exception.Message }
+}
+function Save-CycleFailure($Failure) {
+    $detail = [ordered]@{Error=$Failure.Exception.Message; SHA256=$hash; Attempt=$run.Attempts;
+        Cycle=$run.Cycles; Phase=$run.Phase; Utc=[datetime]::UtcNow.ToString('o');
+        Qpc=[Diagnostics.Stopwatch]::GetTimestamp(); ReceiverEdges=@($receiver.Edges); KnownTestDrag=$run.KnownDrag}
+    $folder = Join-Path $out ('failure-{0:D5}' -f [Math]::Max(1,$run.Failures))
+    $null = New-Item -ItemType Directory -Path $folder
+    $run.FailureDir = $folder
+    Add-Observation $detail WindowsLeftDown { [ReleaseReceiver]::LeftDown() }
+    Add-Observation $detail Pointer { [Windows.Forms.Cursor]::Position.ToString() }
+    if ($run.App) { $detail.ProcessId = $run.App.Id }
+    $receiver.Trace.GetRange($run.TraceStart, $receiver.Trace.Count - $run.TraceStart).ToArray() |
+        Set-Content -LiteralPath (Join-Path $folder 'partial-cycle.txt')
+    if ($receiver.TraceDrag) {
+        $receiver.DragTimeline.GetRange($run.TimelineStart, $receiver.DragTimeline.Count - $run.TimelineStart).ToArray() |
+            Set-Content -LiteralPath (Join-Path $folder 'receiver-at-failure.log')
+    }
+    $statePath = Join-Path $folder 'failure-state.json'
+    $detail | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath
+    if ($run.Window -ne [IntPtr]::Zero) {
+        Add-Observation $detail ToolbarDpi { [ReleaseReceiver]::GetDpiForWindow($run.Window) }
+        Add-Observation $detail ToolbarBounds { [ReleaseReceiver]::ScreenBounds($run.Window).ToString() }
+        Add-Observation $detail ToolbarResponsive { [ReleaseReceiver]::Responds($run.Window) }
+        Add-Observation $detail Screenshot {
+            $bitmap = [ReleaseReceiver]::CaptureWindow($run.Window)
+            try { $bitmap.Save((Join-Path $folder 'toolbar.png'),[Drawing.Imaging.ImageFormat]::Png) }
+            finally { $bitmap.Dispose() }
+            'toolbar.png'
+        }
+        if (!$isReference) { Add-Observation $detail VisibleControls { [ReleaseReceiver]::VisibleLabels($run.Window) } }
+    }
+    $detail | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath
+    if ($run.Failures -le 1) { Copy-Item -LiteralPath $statePath -Destination (Join-Path $out 'failure-state.json') }
+}
+function Observe-LateEdges {
+    # Hold the destination and pump the receiver before any recovery action.
+    $first = $receiver.Edges.Count
+    $late = [Diagnostics.Stopwatch]::StartNew()
+    $samples = do {
+        [pscustomobject]@{Qpc=[Diagnostics.Stopwatch]::GetTimestamp(); LeftDown=[ReleaseReceiver]::LeftDown();
+            ToolbarResponsive=[ReleaseReceiver]::Responds($run.Window); ReceiverEdges=$receiver.Edges.Count - $first}
+        [ReleaseReceiver]::Pump(75)
+    } while ($late.ElapsedMilliseconds -lt 3000)
+    @{Samples=@($samples); Edges=@($receiver.Edges.GetRange($first,$receiver.Edges.Count-$first).ToArray());
+      LeftDown=[ReleaseReceiver]::LeftDown(); ObservationMilliseconds=$late.ElapsedMilliseconds} |
+        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $run.FailureDir 'late-observation.json')
+}
+function Recover-TestCycle {
+    $recovery = [ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o'); OldPid=$run.App.Id; NewPid=$null; Safe=$false}
+    $interruption = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        [ReleaseReceiver]::RequireInputDesktop()
+        $first = $receiver.Edges.Count
+        if (!$run.App.HasExited) {
+            [ReleaseReceiver]::CloseToolbar($run.Window,$run.App.Id)
+            $wait = [Diagnostics.Stopwatch]::StartNew()
+            while (!$run.App.HasExited -and $wait.ElapsedMilliseconds -lt 2000) { [ReleaseReceiver]::Pump(50) }
+            $recovery.ForcedToolbarExit = !$run.App.HasExited
+            if (!$run.App.HasExited) { $run.App.Kill() }
+            if (!$run.App.WaitForExit(2000)) { throw 'The failed candidate could not be retired.' }
+        }
+        $wait = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            [ReleaseReceiver]::Pump(100)
+            $active = @(Get-Process -Name HoverPulse,DwellClicker -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session)
+        } while ($active.Count -and $wait.ElapsedMilliseconds -lt 3000)
+        $recovery.ProcessesStillPresent = @($active | ForEach-Object Id)
+        $recovery.CandidateExitEdges = @($receiver.Edges.GetRange($first,$receiver.Edges.Count-$first).ToArray())
+        if ($active.Count) { throw 'A clicker or its drag worker is still present in the test session.' }
+
+        [ReleaseReceiver]::RequireInputDesktop()
+        if ([ReleaseReceiver]::OtherButtonDown()) { throw 'Windows reports another mouse button held.' }
+        $recovery.LeftDownAfterRetirement = [ReleaseReceiver]::LeftDown()
+        $recovery.FixtureReleaseAttempted = $false
+        if ($recovery.LeftDownAfterRetirement) {
+            if (!$run.KnownDrag) { throw 'Windows reports a held left button without a verified test drag.' }
+            $dragEdges = @($receiver.Trace.GetRange($run.DragTraceStart,$receiver.Trace.Count-$run.DragTraceStart) |
+                Where-Object { $_ -match ' (LD|LU) ' })
+            if ($dragEdges.Count -ne 1 -or $dragEdges[0] -notmatch ' LD ') {
+                throw 'The held button cannot be attributed to the verified test drag.'
+            }
+            $first = $receiver.Edges.Count
+            $recovery.FixtureReleaseAttempted = $true
+            try { $receiver.ReleaseTestDrag() }
+            finally { $recovery.FixtureReleaseEdges = @($receiver.Edges.GetRange($first,$receiver.Edges.Count-$first).ToArray()) }
+            if (($recovery.FixtureReleaseEdges -join ',') -ne 'LU') { throw 'The receiver did not verify the fixture release.' }
+        }
+        if ([ReleaseReceiver]::LeftDown() -or [ReleaseReceiver]::OtherButtonDown()) { throw 'Windows still reports a held mouse button.' }
+        if ($endurance.Elapsed.TotalHours -lt $SoakHours) {
+            if ((Get-FileHash -LiteralPath $exe.FullName).Hash -ne $hash) { throw 'Candidate hash changed before restart.' }
+            [ReleaseReceiver]::Foreground($receiver.Handle)
+            $receiver.Edges.Clear()
+            $receiver.Hold($receiver.Handle,-48,100)
+            if ($receiver.Edges.Count -or [ReleaseReceiver]::LeftDown() -or [ReleaseReceiver]::OtherButtonDown()) {
+                throw 'Unexpected input before candidate restart.'
+            }
+            try { Open-TestToolbar }
+            finally {
+                if ($run.App -and $run.App.Id -ne $recovery.OldPid) {
+                    $run.Restarts++
+                    $recovery.NewPid = $run.App.Id
+                }
+            }
+            $receiver.Hold($receiver.Handle,-48,1200)
+            $recovery.RestartEdges = @($receiver.Edges)
+            if (($receiver.Edges -join ',') -ne 'LD,LU' -or [ReleaseReceiver]::LeftDown() -or [ReleaseReceiver]::OtherButtonDown()) {
+                throw 'The restarted candidate did not deliver a clean left click to the receiver.'
+            }
+            $receiver.Edges.Clear()
+        }
+        $recovery.Safe = $true
+    } catch {
+        $recovery.StopReason = $_.Exception.Message
+        throw
+    } finally {
+        $recovery.InterruptionSeconds = $interruption.Elapsed.TotalSeconds
+        $recovery | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $run.FailureDir 'recovery.json')
+    }
+}
 try {
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($true) }
     $receiver.TopMost = $true
     $receiver.Show()
     $receiver.Activate()
     [ReleaseReceiver]::Pump(250)
+    [ReleaseReceiver]::RequireInputDesktop()
+    if ([ReleaseReceiver]::LeftDown() -or [ReleaseReceiver]::OtherButtonDown()) { throw 'A mouse button is held before the test.' }
     $receiver.Hold($receiver.Handle,-48,100)
     $receiver.TopMost = $false
     if ($RestrictedPeer -or $TraceDrag) {
@@ -141,19 +284,9 @@ try {
         $start.EnvironmentVariables['TMP'] = $lowTemp
         $start.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] = $lowTemp
     }
-    if ($start) {
-        $app = [Diagnostics.Process]::Start($start)
-    } else {
-        $app = Start-Process -FilePath $exe.FullName -PassThru
-    }
-    $startup = [Diagnostics.Stopwatch]::StartNew()
-    do {
-        $app.Refresh()
-        if ($app.HasExited) { throw "Toolbar exited during startup with code $($app.ExitCode)." }
-        if ($startup.Elapsed.TotalSeconds -gt 30) { throw 'Timed out waiting for the visible toolbar.' }
-        [ReleaseReceiver]::Pump(100)
-        $window = if ($isReference) { $app.MainWindowHandle } else { [ReleaseReceiver]::CandidateToolbar($app.Id) }
-    } until ($window -ne 0)
+    Open-TestToolbar
+    $app = $run.App
+    $window = $run.Window
     if ($RestrictedPeer) {
         & (Join-Path $PSScriptRoot Test-InputBoundary.ps1) -Receiver $receiver -App $app -Window $window -PeerExecutable $RestrictedPeer -OutputDirectory $out -Alternate:$Alternate
         $passed=$true
@@ -164,66 +297,74 @@ try {
     }
     function Check-Edges([string]$Phase,[string]$Expected) {
         $actual = $receiver.Edges -join ','
-        if ($actual -ne $Expected) { throw "Cycle $cycles, ${Phase}: expected [$Expected], received [$actual]." }
+        if ($actual -ne $Expected) { throw "Cycle $($run.Cycles), ${Phase}: expected [$Expected], received [$actual]." }
         $receiver.Edges.Clear()
     }
     function Select-Mode([string]$Label,[int]$Id,[int]$Offset = 0) {
+        $run.Phase = $Label
         $button = [ReleaseReceiver]::Button($window,$Label,$Id,$isReference)
         $receiver.Hold($button,$Offset,1100)
         Check-Edges $Label ''
+    }
+    function Hold-ReceiverPhase([string]$Phase,[int]$Offset,[int]$Milliseconds,[string]$Expected) {
+        $run.Phase = $Phase
+        $receiver.Hold($receiver.Handle,$Offset,$Milliseconds)
+        Check-Edges $Phase $Expected
     }
     # Prime the first position. Ignore only this startup interval.
     $receiver.Hold($receiver.Handle,-48,1200)
     $receiver.Edges.Clear()
     $endurance = [Diagnostics.Stopwatch]::StartNew()
-    do {
+    $runCycle = {
+        $window = $run.Window
+        $run.TraceStart = $receiver.Trace.Count
+        $run.TimelineStart = $receiver.DragTimeline.Count
+        $run.KnownDrag = $false
         Select-Mode 'Right' 1003
-        $receiver.Hold($receiver.Handle,0,1200)
-        Check-Edges 'right click' 'RD,RU'
-        $receiver.Hold($receiver.Handle,30,1200)
-        Check-Edges 'restore left default' 'LD,LU'
+        Hold-ReceiverPhase 'right click' 0 1200 'RD,RU'
+        Hold-ReceiverPhase 'restore left default' 30 1200 'LD,LU'
         Select-Mode 'Double' 1001
-        $receiver.Hold($receiver.Handle,0,1200)
-        Check-Edges 'double click' 'LD,LU,LD,LU'
+        Hold-ReceiverPhase 'double click' 0 1200 'LD,LU,LD,LU'
         Select-Mode 'Drag' 1002
-        $receiver.Hold($receiver.Handle,30,$DragHoldMilliseconds)
-        Check-Edges 'start drag' 'LD'
+        $run.DragTraceStart = $receiver.Trace.Count
+        Hold-ReceiverPhase 'start drag' 30 $DragHoldMilliseconds 'LD'
+        $run.KnownDrag = $true
         Select-Mode 'Pause' 1000
-        $receiver.Hold($receiver.Handle,0,1200)
-        Check-Edges 'paused dwell during drag' ''
+        Hold-ReceiverPhase 'paused dwell during drag' 0 1200 ''
         Select-Mode 'Resume' 1000 4
-        $receiver.Hold($receiver.Handle,30,1200)
+        $run.Phase = 'drop after resume'
+        $receiver.Hold($receiver.Handle,30,$DropDeadlineMilliseconds)
         $heldAtDeadline = [ReleaseReceiver]::LeftDown()
-        if ($TraceDrag) { $receiver.MarkDrag("drop-deadline cycle=$($cycles+1) leftDown=$heldAtDeadline") }
-        if (!$receiver.Edges.Count -and $TraceDrag) {
-            # Hold the destination and keep pumping before cleanup. The normal deadline still fails.
-            $late = [Diagnostics.Stopwatch]::StartNew()
-            do {
-                $held = [ReleaseReceiver]::LeftDown()
-                $responsive = [ReleaseReceiver]::Responds($window)
-                $receiver.MarkDrag("late-probe leftDown=$held uiResponsive=$responsive")
-                [ReleaseReceiver]::Pump(75)
-            } until ($receiver.Edges.Count -or $late.Elapsed.TotalSeconds -ge 3)
-            $dropObservation = [ordered]@{
-                LeftDownAtDeadline=$heldAtDeadline; LeftDownAfterObservation=[ReleaseReceiver]::LeftDown();
-                EdgesAfterDeadline=@($receiver.Edges); ObservationMilliseconds=$late.ElapsedMilliseconds
-            }
-            throw "Cycle $cycles, drop after resume: expected [LU], received [] at the deadline."
-        }
+        if ($receiver.TraceDrag) { $receiver.MarkDrag("drop-deadline attempt=$($run.Attempts) leftDown=$heldAtDeadline") }
+        if ($heldAtDeadline) { throw "Cycle $($run.Cycles), Windows still reports a held left button at the drop deadline." }
         Check-Edges 'drop after resume' 'LU'
-        if ($heldAtDeadline) { throw "Cycle $cycles, Windows still reports a held left button at the drop deadline." }
-        $cycles++
-        if ($cycles -eq 1 -or $cycles % 10 -eq 0) {
-            @{Cycles=$cycles; ElapsedSeconds=$endurance.Elapsed.TotalSeconds; Utc=[DateTime]::UtcNow.ToString('o')} |
+        $run.KnownDrag = $false
+    }
+    $progress = {
+        if ($run.Attempts -eq 1 -or $run.Attempts % 10 -eq 0 -or $run.FailureDir) {
+            @{Cycles=$run.Cycles; Attempts=$run.Attempts; Failures=$run.Failures; Restarts=$run.Restarts;
+              ElapsedSeconds=$endurance.Elapsed.TotalSeconds; Utc=[DateTime]::UtcNow.ToString('o')} |
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
-            if ($SoakHours -gt 0) {
-                $app.Refresh()
-                [pscustomobject]@{Cycle=$cycles;Handles=$app.HandleCount;PrivateBytes=$app.PrivateMemorySize64;
-                    CpuSeconds=$app.TotalProcessorTime.TotalSeconds;DelayedHolds=$receiver.DelayedHolds.Count} |
+            if ($SoakHours -gt 0 -and !$run.App.HasExited) {
+                $run.App.Refresh()
+                [pscustomobject]@{Cycle=$run.Cycles;Attempt=$run.Attempts;PID=$run.App.Id;Handles=$run.App.HandleCount;
+                    PrivateBytes=$run.App.PrivateMemorySize64;CpuSeconds=$run.App.TotalProcessorTime.TotalSeconds;DelayedHolds=$receiver.DelayedHolds.Count} |
                     Export-Csv -NoTypeInformation -Append -LiteralPath (Join-Path $out 'resource-samples.csv')
             }
         }
-    } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
+        $run.FailureDir = $null
+    }
+    $recover = if ($SoakHours -gt 0 -and !$isReference) { { Recover-TestCycle } }
+    Invoke-DeliveryCycles -State $run -RunCycle $runCycle -RecordProgress $progress -Recover $recover `
+        -HasTime { $endurance.Elapsed.TotalHours -lt $SoakHours } -RecordFailure {
+            param($failure)
+            Save-CycleFailure $failure
+            if ($receiver.TraceDrag -and $run.Phase -eq 'drop after resume') { Observe-LateEdges }
+        }
+    $app = $run.App
+    $window = $run.Window
+    if (!$run.Passed) { throw "Endurance finished with $($run.Failures) failed cycle(s). See the recorded failures and recovery receipts." }
+    $run.Phase = 'post-cycle qualification'
     if ($MeasureMotion) {
         $observations = foreach ($origin in 0,1,2) {
             foreach ($delta in 4,5,6,7,8) {
@@ -363,43 +504,31 @@ try {
 }
 catch {
     $failure = $_
-    $detail = [ordered]@{Error=$failure.Exception.Message; Cycle=$cycles; Utc=[datetime]::UtcNow.ToString('o')}
-    if ($dropObservation) { $detail.DropObservation = $dropObservation }
-    try {
-        $detail.WindowsLeftDown = [ReleaseReceiver]::LeftDown()
-        $detail.Pointer = [Windows.Forms.Cursor]::Position.ToString()
-        if ($app -and !$app.HasExited) {
-            $app.Refresh()
-            $detail.ProcessId = $app.Id
-            $detail.MainWindowTitle = $app.MainWindowTitle
-            if ($app.MainWindowHandle -ne [IntPtr]::Zero) { $detail.MainWindowControls = [ReleaseReceiver]::VisibleLabels($app.MainWindowHandle) }
-        }
-        if ($app -and !$app.HasExited -and $window -and $window -ne [IntPtr]::Zero) {
-            $detail.ToolbarDpi = [ReleaseReceiver]::GetDpiForWindow($window)
-            $detail.ToolbarBounds = [ReleaseReceiver]::ScreenBounds($window).ToString()
-            if (!$isReference) { $detail.VisibleControls = [ReleaseReceiver]::VisibleLabels($window) }
-            $bitmap = [ReleaseReceiver]::CaptureWindow($window)
-            try { $bitmap.Save((Join-Path $out 'failure-toolbar.png'),[Drawing.Imaging.ImageFormat]::Png) }
-            finally { $bitmap.Dispose() }
-        }
-    } catch { $detail.InspectionError = $_.Exception.Message }
-    $detail | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $out 'failure-state.json')
+    if (!$run.StopReason -and !$run.Completed) { $run.StopReason = $failure.Exception.Message }
+    if (!$run.Failures) { Save-CycleFailure $failure }
     throw $failure
 }
 finally {
-    if ($app -and !$app.HasExited) {
-        if ($window) { [ReleaseReceiver]::CloseToolbar($window,$app.Id) }
-        if (!$app.WaitForExit(2500)) { $app.Kill(); $app.WaitForExit() }
-    }
+    $cleanupError = $null
+    try {
+        if ($run.App -and !$run.App.HasExited) {
+            if ($run.Window -and !$run.StopReason) { [ReleaseReceiver]::CloseToolbar($run.Window,$run.App.Id) }
+            if (!$run.App.WaitForExit(2500)) { $run.App.Kill(); $run.App.WaitForExit() }
+        }
+    } catch { $cleanupError = $_.Exception.Message; $passed = $false }
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)
-    if ($TraceDrag) {
+    if ($receiver.TraceDrag) {
         $receiver.DragTimeline | Set-Content -LiteralPath (Join-Path $out 'receiver-drag.log')
         [Diagnostics.Stopwatch]::Frequency | Set-Content -LiteralPath (Join-Path $out 'qpc-frequency.txt')
     }
     if ($receiver.DelayedHolds.Count) { $receiver.DelayedHolds | Set-Content -LiteralPath (Join-Path $out 'delayed-holds.txt') }
     @{ Product=$Product; SHA256=$hash; Passed=$passed; Host=$computer.Name; Model=$computer.Model;
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
-       Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
+       Cycles=$run.Cycles; Attempts=$run.Attempts; FailedCycles=$run.Failures; CandidateRestarts=$run.Restarts;
+       RequestedSoakHours=$SoakHours; SoakCompleted=$run.Completed; SoakElapsedSeconds=if ($endurance) {$endurance.Elapsed.TotalSeconds};
+       StopReason=$run.StopReason; CleanupError=$cleanupError;
+       ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
+       DropDeadlineMilliseconds=$DropDeadlineMilliseconds;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent; CheckedLock=$CheckLock.IsPresent; SessionEvents=@($receiver.SessionEvents);
        CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent;
