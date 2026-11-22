@@ -2,145 +2,71 @@ using HoverPulse.Interop;
 
 namespace HoverPulse.Core;
 
-/// <summary>
-/// Monitors cursor position and detects dwell events (cursor stationary within
-/// a tolerance radius for a configurable duration).
-/// </summary>
-internal sealed class DwellDetector : IDisposable
+internal sealed class DwellDetector
 {
-    private readonly object _lock = new();
+    private POINT? _previous;
+    private int _count;
+    private bool _latched;
+    public bool Paused { get; private set; }
+    public int ClickTime { get; set; } = 2;
+    public int MoveLimit { get; set; } = 5;
+    public double Progress => _latched ? 0 : Math.Clamp((double)_count / (ClickTime + 1), 0, 1);
 
-    private POINT _dwellStartPoint;
-    private DateTime _dwellStartTime;
-    private bool _isDwelling;
-    private bool _isEnabled = true;
-    private bool _isPaused;
-    private bool _clickFiredForCurrentDwell;
-
-    /// <summary>Dwell time in milliseconds. Default: 1000ms.</summary>
-    public int DwellTimeMs { get; set; } = 1000;
-
-    /// <summary>Tolerance radius in pixels. Default: 10px.</summary>
-    public int ToleranceRadius { get; set; } = 10;
-
-    /// <summary>Whether dwell detection is enabled.</summary>
-    public bool IsEnabled
+    public void Reset()
     {
-        get => _isEnabled;
-        set { _isEnabled = value; Reset(); }
+        _previous = null;
+        _count = 0;
+        _latched = false;
     }
 
-    /// <summary>Whether dwell detection is temporarily paused.</summary>
-    public bool IsPaused
+    public void SetPaused(bool paused)
     {
-        get => _isPaused;
-        set { _isPaused = value; Reset(); }
+        Paused = paused;
+        _count = 0;
     }
 
-    /// <summary>Raised when dwell progress updates (0.0 to 1.0).</summary>
-    public event Action<POINT, double>? DwellProgress;
-
-    /// <summary>Raised when a dwell completes and a click should be triggered.</summary>
-    public event Action<POINT>? DwellCompleted;
-
-    /// <summary>Raised when a dwell is cancelled (cursor moved out of tolerance).</summary>
-    public event Action? DwellCancelled;
-
-    /// <summary>
-    /// Called on every cursor movement. Evaluates whether the cursor is dwelling.
-    /// </summary>
-    public void OnCursorMoved(POINT currentPosition)
+    // Called once per delivered timer message. Off-button samples during pause
+    // leave even the previous coordinates untouched.
+    public bool Sample(POINT point, bool overToggle)
     {
-        if (!_isEnabled || _isPaused)
+        if (Paused && !overToggle)
         {
-            return;
+            return false;
         }
 
-        lock (_lock)
+        var previous = _previous;
+        _previous = point;
+        if (previous is null)
         {
-            if (!_isDwelling)
-            {
-                // Start a new dwell
-                _dwellStartPoint = currentPosition;
-                _dwellStartTime = DateTime.UtcNow;
-                _isDwelling = true;
-                _clickFiredForCurrentDwell = false;
-                return;
-            }
-
-            var distance = currentPosition.DistanceTo(_dwellStartPoint);
-
-            if (distance > ToleranceRadius)
-            {
-                // Cursor moved outside tolerance — reset
-                _isDwelling = false;
-                _clickFiredForCurrentDwell = false;
-                DwellCancelled?.Invoke();
-
-                // Start a new dwell from current position
-                _dwellStartPoint = currentPosition;
-                _dwellStartTime = DateTime.UtcNow;
-                _isDwelling = true;
-                return;
-            }
-
-            // Cursor still within tolerance — check elapsed time
-            var elapsed = (DateTime.UtcNow - _dwellStartTime).TotalMilliseconds;
-            var progress = Math.Clamp(elapsed / DwellTimeMs, 0.0, 1.0);
-
-            if (elapsed >= DwellTimeMs && !_clickFiredForCurrentDwell)
-            {
-                _clickFiredForCurrentDwell = true;
-                DwellCompleted?.Invoke(_dwellStartPoint);
-            }
-            else if (!_clickFiredForCurrentDwell)
-            {
-                DwellProgress?.Invoke(_dwellStartPoint, progress);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Called periodically (e.g., on WM_TIMER) to check dwell state even when
-    /// the cursor is completely still (no mouse messages arriving).
-    /// </summary>
-    public void Tick()
-    {
-        if (!_isEnabled || _isPaused || !_isDwelling || _clickFiredForCurrentDwell)
-        {
-            return;
+            return false;
         }
 
-        lock (_lock)
+        long step = Math.Max(Math.Abs((long)point.X - previous.Value.X),
+                             Math.Abs((long)point.Y - previous.Value.Y));
+        if (_latched)
         {
-            var elapsed = (DateTime.UtcNow - _dwellStartTime).TotalMilliseconds;
-            var progress = Math.Clamp(elapsed / DwellTimeMs, 0.0, 1.0);
-
-            if (elapsed >= DwellTimeMs)
+            if (step >= (Paused ? 2 : MoveLimit))
             {
-                _clickFiredForCurrentDwell = true;
-                DwellCompleted?.Invoke(_dwellStartPoint);
+                _latched = false;
             }
             else
             {
-                DwellProgress?.Invoke(_dwellStartPoint, progress);
+                _count = 0;
             }
         }
-    }
-
-    /// <summary>Resets the current dwell state.</summary>
-    public void Reset()
-    {
-        lock (_lock)
+        _count = step < MoveLimit ? _count + 1 : 0;
+        if (_count <= ClickTime)
         {
-            _isDwelling = false;
-            _clickFiredForCurrentDwell = false;
-            DwellCancelled?.Invoke();
+            return false;
         }
-    }
 
-    public void Dispose()
-    {
-        Reset();
+        if (overToggle)
+        {
+            SetPaused(!Paused);
+        }
+
+        _latched = true;
+        _count = -ClickTime;
+        return true;
     }
 }

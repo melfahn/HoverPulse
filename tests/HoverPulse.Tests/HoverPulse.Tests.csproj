@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="../../specs/naturalpoint-sample-cases.json" Link="naturalpoint-sample-cases.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\HoverPulse\HoverPulse.csproj" />
   </ItemGroup>
 

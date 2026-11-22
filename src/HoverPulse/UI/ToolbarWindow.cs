@@ -1,334 +1,446 @@
+using System.ComponentModel;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
-using System.Drawing.Text;
+using System.Media;
 using System.Runtime.InteropServices;
 using HoverPulse.Core;
 using HoverPulse.Interop;
+using HoverPulse.Services;
 
 namespace HoverPulse.UI;
 
-/// <summary>
-/// Floating toolbar window for selecting click type and toggling pause.
-/// Uses WM_PAINT with double-buffered GDI+ rendering and whole-window opacity.
-/// </summary>
-internal sealed class ToolbarWindow : IDisposable
+internal sealed class ToolbarWindow : Form
 {
-    private const string ClassName = "HoverPulse_Toolbar";
-    private const int ButtonSize = 40;
-    private const int ButtonPadding = 4;
-    private const int ToolbarPadding = 6;
-    private const int ButtonCount = 5;
-    private const float CornerRadius = 10f;
+    private readonly SettingsService _store;
+    private AppSettings _settings;
+    private AppSettings? _draft;
+    private readonly DwellDetector _detector = new();
+    private readonly ActionSelection _selection = new();
+    private readonly ClickSimulator _clicks;
+    private readonly Func<POINT?> _cursor;
+    private readonly FlowLayoutPanel _panel = new() { AutoSize = true, WrapContents = false };
+    private readonly Button _toggle = MakeButton("Pause");
+    private readonly Dictionary<Button, Action> _commands = [];
+    private OverlayWindow? _overlay;
+    private Point? _moveOffset;
+    private bool _processing, _confirmQuit, _running, _lockedSession;
+    private string? _fault;
+    private bool _saveFailed;
+    private int _ticks;
+    private bool _deferredClose;
+    private readonly Companion _companion = new();
 
-    private static readonly Color BackgroundColor = Color.FromArgb(40, 40, 40);
-    private static readonly Color ButtonHoverColor = Color.FromArgb(70, 70, 70);
-    private static readonly Color AccentColor = Color.FromArgb(51, 153, 255);
-    private static readonly Color TextColor = Color.FromArgb(220, 220, 220);
-    private static readonly Color PausedAccentColor = Color.FromArgb(255, 100, 80);
-
-    private static readonly string[] ButtonLabels = ["L", "R", "D", "Dg", "||"];
-    private static readonly ClickType[] ButtonClickTypes =
-        [ClickType.LeftClick, ClickType.RightClick, ClickType.DoubleClick, ClickType.DragStart];
-
-    private readonly NativeMethods.WndProcDelegate _wndProc;
-    private IntPtr _hWnd;
-    private bool _isHorizontal;
-    private int _windowWidth;
-    private int _windowHeight;
-
-    private ClickType _activeClickType = ClickType.LeftClick;
-    private bool _isPaused;
-    private int _hoverIndex = -1;
-
-    // Dragging state
-    private bool _isDragging;
-    private POINT _dragStartCursor;
-    private POINT _dragStartWindow;
-
-    /// <summary>Raised when the user selects a different click type.</summary>
-    public event Action<ClickType>? ClickTypeChanged;
-
-    /// <summary>Raised when the user toggles pause.</summary>
-    public event Action<bool>? PauseToggled;
-
-    /// <summary>Current X position of the toolbar.</summary>
-    public int X { get; private set; }
-
-    /// <summary>Current Y position of the toolbar.</summary>
-    public int Y { get; private set; }
-
-    /// <summary>The currently active click type.</summary>
-    public ClickType ActiveClickType => _activeClickType;
-
-    /// <summary>Whether dwell clicking is paused.</summary>
-    public bool IsPaused => _isPaused;
-
-    public ToolbarWindow()
+    public ToolbarWindow(SettingsService store, AppSettings settings, ClickSimulator? clicks = null, Func<POINT?>? cursor = null)
     {
-        _wndProc = WndProc;
+        _store = store;
+        _clicks = clicks ?? new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges);
+        _cursor = cursor ?? (() => NativeMethods.GetCursorPos(out var point) ? point : null);
+        _settings = settings;
+        _selection.Restore(settings.DefaultAction);
+        Text = "HoverPulse";
+        StartPosition = FormStartPosition.Manual;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = Color.FromArgb(35, 38, 42);
+        Location = new Point(settings.ToolbarX, settings.ToolbarY);
+        Controls.Add(_panel);
+        ApplySettings();
+        LayoutButtons();
     }
 
-    /// <summary>
-    /// Creates and shows the toolbar window.
-    /// </summary>
-    public void Create(IntPtr hInstance, int x, int y, bool horizontal, byte opacity)
+    protected override bool ShowWithoutActivation => true;
+    protected override CreateParams CreateParams
     {
-        _isHorizontal = horizontal;
-        X = x;
-        Y = y;
-        CalculateSize();
-
-        var wc = new WNDCLASSEX
+        get
         {
-            CbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(),
-            Style = NativeMethods.CS_HREDRAW | NativeMethods.CS_VREDRAW,
-            LpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
-            HInstance = hInstance,
-            LpszClassName = ClassName,
-            HCursor = NativeMethods.LoadCursor(IntPtr.Zero, NativeMethods.IDC_ARROW)
-        };
-        NativeMethods.RegisterClassEx(ref wc);
-
-        const uint exStyle = NativeMethods.WS_EX_TOPMOST
-                           | NativeMethods.WS_EX_TOOLWINDOW
-                           | NativeMethods.WS_EX_NOACTIVATE
-                           | NativeMethods.WS_EX_LAYERED;
-
-        _hWnd = NativeMethods.CreateWindowEx(
-            exStyle, ClassName, "",
-            NativeMethods.WS_POPUP | NativeMethods.WS_VISIBLE,
-            X, Y, _windowWidth, _windowHeight,
-            IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
-
-        NativeMethods.SetLayeredWindowAttributes(_hWnd, 0, opacity, NativeMethods.LWA_ALPHA);
+            var cp = base.CreateParams;
+            cp.ExStyle |= (int)(NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TOOLWINDOW);
+            return cp;
+        }
     }
 
-    /// <summary>Sets the active click type and repaints.</summary>
-    public void SetActiveClickType(ClickType clickType)
+    private static Button MakeButton(string label) => new()
     {
-        _activeClickType = clickType;
-        Invalidate();
-    }
+        Text = label,
+        AccessibleName = label,
+        AutoSize = true,
+        FlatStyle = FlatStyle.Flat,
+        ForeColor = Color.White,
+        TabStop = false
+    };
 
-    /// <summary>Sets the paused state and repaints.</summary>
-    public void SetPaused(bool paused)
+    private void Add(string label, Action action, bool selected = false, Button? existing = null)
     {
-        _isPaused = paused;
-        Invalidate();
-    }
-
-    /// <summary>Returns the window handle.</summary>
-    public IntPtr Handle => _hWnd;
-
-    private void CalculateSize()
-    {
-        var totalButtonExtent = ButtonCount * ButtonSize + (ButtonCount - 1) * ButtonPadding;
-        if (_isHorizontal)
+        var button = existing ?? MakeButton(label);
+        button.Text = button.AccessibleName = label;
+        button.BackColor = selected ? Color.Teal : Color.FromArgb(59, 64, 70);
+        button.MinimumSize = new Size(42 + 12 * _settings.AppSize, 28 + 8 * _settings.AppSize);
+        if (existing == null)
         {
-            _windowWidth = totalButtonExtent + ToolbarPadding * 2;
-            _windowHeight = ButtonSize + ToolbarPadding * 2;
+            button.Click += (_, _) => ActivateButton(button);
+        }
+
+        _commands.Add(button, action);
+        _panel.Controls.Add(button);
+    }
+
+    private void ActivateButton(Button button)
+    {
+        if (_processing || !_commands.TryGetValue(button, out var command))
+        {
+            return;
+        }
+
+        _processing = true;
+        try { command(); }
+        finally
+        {
+            _processing = false;
+            if (_deferredClose && !IsDisposed)
+            {
+                _deferredClose = false;
+                BeginInvoke(Close);
+            }
+        }
+    }
+
+    private void LayoutButtons()
+    {
+        _panel.SuspendLayout();
+        foreach (var control in _panel.Controls.Cast<Control>().ToArray())
+        {
+            _panel.Controls.Remove(control);
+            if (control != _toggle)
+            {
+                control.Dispose();
+            }
+        }
+        _commands.Clear();
+        _panel.FlowDirection = _settings.ToolbarHorizontal ? FlowDirection.LeftToRight : FlowDirection.TopDown;
+        if (_draft is not null)
+        {
+            Options();
+        }
+        else if (_confirmQuit)
+        {
+            Add("Quit HoverPulse", Close);
+            Add("Cancel", () => { _confirmQuit = false; LayoutButtons(); });
         }
         else
         {
-            _windowWidth = ButtonSize + ToolbarPadding * 2;
-            _windowHeight = totalButtonExtent + ToolbarPadding * 2;
-        }
-    }
-
-    private Rectangle GetButtonRect(int index)
-    {
-        int x, y;
-        if (_isHorizontal)
-        {
-            x = ToolbarPadding + index * (ButtonSize + ButtonPadding);
-            y = ToolbarPadding;
-        }
-        else
-        {
-            x = ToolbarPadding;
-            y = ToolbarPadding + index * (ButtonSize + ButtonPadding);
-        }
-        return new Rectangle(x, y, ButtonSize, ButtonSize);
-    }
-
-    private int HitTestButton(int x, int y)
-    {
-        for (var i = 0; i < ButtonCount; i++)
-        {
-            if (GetButtonRect(i).Contains(x, y))
+            Add(_fault ?? (_detector.Paused ? "Resume" : "Pause"), () => Toggle(false), existing: _toggle);
+            if (!_detector.Paused)
             {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private void PaintWindow(IntPtr hdc)
-    {
-        using var bitmap = new Bitmap(_windowWidth, _windowHeight, PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(bitmap);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-
-        // Background
-        using (var bgPath = GdiHelpers.CreateRoundedRect(
-            new RectangleF(0, 0, _windowWidth, _windowHeight), CornerRadius))
-        using (var bgBrush = new SolidBrush(BackgroundColor))
-        {
-            g.FillPath(bgBrush, bgPath);
-        }
-
-        using var font = new Font("Segoe UI", 11f, FontStyle.Bold);
-        using var textBrush = new SolidBrush(TextColor);
-
-        for (var i = 0; i < ButtonCount; i++)
-        {
-            var rect = GetButtonRect(i);
-            var rectF = new RectangleF(rect.X, rect.Y, rect.Width, rect.Height);
-            var isPauseButton = i == ButtonCount - 1;
-
-            // Determine button color
-            Color? fillColor = null;
-            if (isPauseButton && _isPaused)
-            {
-                fillColor = PausedAccentColor;
-            }
-            else if (!isPauseButton && ButtonClickTypes[i] == _activeClickType)
-            {
-                fillColor = AccentColor;
-            }
-            else if (i == _hoverIndex)
-            {
-                fillColor = ButtonHoverColor;
-            }
-
-            if (fillColor is not null)
-            {
-                using var btnPath = GdiHelpers.CreateRoundedRect(rectF, 6f);
-                using var btnBrush = new SolidBrush(fillColor.Value);
-                g.FillPath(btnBrush, btnPath);
-            }
-
-            // Draw label
-            using var sf = new StringFormat
-            {
-                Alignment = StringAlignment.Center,
-                LineAlignment = StringAlignment.Center
-            };
-            g.DrawString(ButtonLabels[i], font, textBrush, rectF, sf);
-        }
-
-        // Blit to window DC
-        using var srcGraphics = Graphics.FromHdc(hdc);
-        srcGraphics.DrawImageUnscaled(bitmap, 0, 0);
-    }
-
-    private void Invalidate()
-    {
-        if (_hWnd != IntPtr.Zero)
-        {
-            NativeMethods.InvalidateRect(_hWnd, IntPtr.Zero, true);
-        }
-    }
-
-    private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
-    {
-        switch (msg)
-        {
-            case NativeMethods.WM_PAINT:
-            {
-                var hdc = NativeMethods.BeginPaint(hWnd, out var ps);
-                PaintWindow(hdc);
-                NativeMethods.EndPaint(hWnd, ref ps);
-                return IntPtr.Zero;
-            }
-
-            case NativeMethods.WM_LBUTTONDOWN:
-            {
-                int mouseX = (short)(lParam.ToInt64() & 0xFFFF);
-                int mouseY = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
-                var buttonIndex = HitTestButton(mouseX, mouseY);
-
-                if (buttonIndex >= 0)
+                foreach (var (label, mode) in new[] { ("Double", ClickType.DoubleClick),
+                    ("Drag", ClickType.DragStart), ("Right", ClickType.RightClick), ("Left", ClickType.LeftClick) })
                 {
-                    if (buttonIndex == ButtonCount - 1)
-                    {
-                        // Pause button
-                        _isPaused = !_isPaused;
-                        PauseToggled?.Invoke(_isPaused);
-                        Invalidate();
-                    }
-                    else
-                    {
-                        // Click type button
-                        _activeClickType = ButtonClickTypes[buttonIndex];
-                        ClickTypeChanged?.Invoke(_activeClickType);
-                        Invalidate();
-                    }
+                    var caption = label + (_selection.Locked == mode ? " *" : "");
+                    Add(caption, () => { _selection.Select(mode); _settings.DefaultAction = _selection.Locked; LayoutButtons(); },
+                        _selection.Temporary == mode || (mode == ClickType.DragStart && _selection.Dragging));
+                }
+                Add(_saveFailed ? "Options · unsaved" : "Options", OpenOptions);
+                Add("Quit", () => { _confirmQuit = true; LayoutButtons(); });
+                Add(_moveOffset.HasValue ? "Place" : "Move", StartMove);
+            }
+        }
+        _panel.WrapContents = true;
+        _panel.MaximumSize = Screen.FromRectangle(Bounds).WorkingArea.Size;
+        _panel.ResumeLayout(true);
+        ClientSize = _panel.GetPreferredSize(Size.Empty);
+        KeepReachable();
+    }
+
+    private void OpenOptions()
+    {
+        _draft = _settings.Copy();
+        _draft.ToolbarX = Left;
+        _draft.ToolbarY = Top;
+        LayoutButtons();
+    }
+
+    private void Options()
+    {
+        var draft = _draft!;
+        void Change(Action action) { action(); LayoutButtons(); }
+        Add($"Time − {draft.ClickTime / 10.0:0.0}s", () => Change(() => draft.ClickTime = Math.Max(1, draft.ClickTime - 1)));
+        Add("Time +", () => Change(() => draft.ClickTime = Math.Min(50, draft.ClickTime + 1)));
+        Add($"Motion − {draft.MoveLimit}px", () => Change(() => draft.MoveLimit = Math.Max(2, draft.MoveLimit - 1)));
+        Add("Motion +", () => Change(() => draft.MoveLimit = Math.Min(20, draft.MoveLimit + 1)));
+        Add($"Size {draft.AppSize}", () => Change(() => draft.AppSize = draft.AppSize % 3 + 1));
+        string[] floatNames = ["On", "Off", "Always"];
+        Add($"Float {floatNames[draft.FloatMode]}", () => Change(() => draft.FloatMode = (draft.FloatMode + 1) % 3));
+        Add(draft.AudioEnabled ? "Sound on" : "Sound off", () => Change(() => draft.AudioEnabled = !draft.AudioEnabled));
+        Add(draft.AlternateInput ? "SendInput" : "Legacy input", () => Change(() => draft.AlternateInput = !draft.AlternateInput));
+        Add("Bedroom profile", () => Change(() => _draft = new AppSettings()));
+        Add("OK", () =>
+        {
+            _settings = draft;
+            _draft = null;
+            _selection.Restore(draft.DefaultAction);
+            ApplySettings();
+            Location = new Point(draft.ToolbarX, draft.ToolbarY);
+            LayoutButtons();
+            Save();
+        });
+        Add("Cancel", () => { _draft = null; LayoutButtons(); });
+    }
+
+    private void ApplySettings()
+    {
+        if (!_settings.ShowIndicator)
+        {
+            _overlay?.Hide();
+        }
+
+        _detector.ClickTime = _settings.ClickTime;
+        _detector.MoveLimit = _settings.MoveLimit;
+        TopMost = _settings.FloatMode != 1;
+        Opacity = _settings.ToolbarOpacity;
+    }
+
+    private void KeepReachable()
+    {
+        Rectangle bounds = Screen.FromRectangle(Bounds).WorkingArea;
+        Location = new Point(Math.Clamp(Left, bounds.Left, Math.Max(bounds.Left, bounds.Right - Width)),
+            Math.Clamp(Top, bounds.Top, Math.Max(bounds.Top, bounds.Bottom - Height)));
+    }
+
+    private void StartMove()
+    {
+        if (_cursor() is not POINT point)
+        {
+            return;
+        }
+
+        _moveOffset = new Point(point.X - Left, point.Y - Top);
+        LayoutButtons();
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        _toggle.Click += (_, _) => ActivateButton(_toggle);
+        if (NativeMethods.SetTimer(Handle, 1, 100, 0) == 0)
+        {
+            throw new Win32Exception();
+        }
+
+        _running = true;
+        if (_settings.ShowIndicator)
+        {
+            _overlay = new OverlayWindow();
+            _overlay.SetColor(_settings.IndicatorColor);
+            _overlay.Create(NativeMethods.GetModuleHandle(null));
+        }
+        if (!NativeMethods.WTSRegisterSessionNotification(Handle, 0))
+        {
+            throw new Win32Exception();
+        }
+    }
+
+    private void Toggle(bool fromDwell)
+    {
+        if (_fault != null)
+        {
+            if (!_clicks.Release()) { _detector.SetPaused(true); return; }
+            _fault = null;
+            _selection.Completed(ClickType.DragEnd);
+        }
+        if (!fromDwell)
+        {
+            _detector.SetPaused(!_detector.Paused);
+        }
+
+        LayoutButtons();
+    }
+
+    internal void Tick()
+    {
+        if (_processing || _lockedSession)
+        {
+            return;
+        }
+
+        _processing = true;
+        try
+        {
+            if (++_ticks % 20 == 1)
+            {
+                _companion.Discover();
+                if (_settings.FloatMode == 2)
+                {
+                    NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, 0x13);
+                }
+            }
+            if (_cursor() is not POINT p) { _detector.Reset(); _overlay?.Hide(); return; }
+            if (_moveOffset is Point offset)
+            {
+                Location = new Point(p.X - offset.X, p.Y - offset.Y);
+                KeepReachable();
+                if (_detector.Sample(p, false)) { _moveOffset = null; LayoutButtons(); Save(); }
+                return;
+            }
+            var hwnd = NativeMethods.WindowFromPoint(p);
+            if (hwnd == 0) { _detector.Reset(); return; }
+            var hit = Control.FromHandle(hwnd);
+            var button = hit as Button;
+            bool onToggle = button != null && button == _toggle && _commands.ContainsKey(button);
+            bool owned = hit?.FindForm() == this;
+            if (!_detector.Sample(p, onToggle))
+            {
+                if (_settings.ShowIndicator && !owned && !_detector.Paused && _detector.Progress > 0)
+                {
+                    _overlay?.UpdateProgress(p, _detector.Progress);
                 }
                 else
                 {
-                    // Start dragging on empty space
-                    _isDragging = true;
-                    NativeMethods.GetCursorPos(out _dragStartCursor);
-                    _dragStartWindow = new POINT(X, Y);
-                    NativeMethods.SetCapture(hWnd);
+                    _overlay?.Hide();
                 }
-                return IntPtr.Zero;
+
+                return;
             }
-
-            case NativeMethods.WM_MOUSEMOVE:
+            _overlay?.Hide();
+            if (onToggle)
             {
-                int mouseX = (short)(lParam.ToInt64() & 0xFFFF);
-                int mouseY = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
-
-                if (_isDragging)
+                Toggle(true);
+            }
+            else if (button != null && _commands.TryGetValue(button, out var command))
+            {
+                command();
+            }
+            else if (!owned && _draft == null && !_confirmQuit)
+            {
+                bool hadOverride = _selection.Temporary.HasValue;
+                var next = _selection.Next;
+                if (!_clicks.Dispatch(next, _settings.AlternateInput))
                 {
-                    NativeMethods.GetCursorPos(out var currentCursor);
-                    X = _dragStartWindow.X + (currentCursor.X - _dragStartCursor.X);
-                    Y = _dragStartWindow.Y + (currentCursor.Y - _dragStartCursor.Y);
-                    NativeMethods.SetWindowPos(
-                        hWnd, IntPtr.Zero,
-                        X, Y, 0, 0,
-                        NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+                    _fault = "Input failed · resume";
+                    _detector.SetPaused(true);
                 }
                 else
                 {
-                    var newHover = HitTestButton(mouseX, mouseY);
-                    if (newHover != _hoverIndex)
-                    {
-                        _hoverIndex = newHover;
-                        Invalidate();
-                    }
+                    _selection.Completed(next);
                 }
-                return IntPtr.Zero;
-            }
 
-            case NativeMethods.WM_LBUTTONUP:
-            {
-                if (_isDragging)
+                if (_fault != null || next is ClickType.DragStart or ClickType.DragEnd || hadOverride)
                 {
-                    _isDragging = false;
-                    NativeMethods.ReleaseCapture();
+                    LayoutButtons();
                 }
-                return IntPtr.Zero;
             }
-
-            case NativeMethods.WM_DESTROY:
-                NativeMethods.PostQuitMessage(0);
-                return IntPtr.Zero;
+            if (_settings.AudioEnabled)
+            {
+                SystemSounds.Asterisk.Play();
+            }
         }
-
-        return NativeMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+        finally
+        {
+            _processing = false;
+            if (_deferredClose && !IsDisposed)
+            {
+                _deferredClose = false;
+                BeginInvoke(Close);
+            }
+        }
     }
 
-    public void Dispose()
+    private static void BetweenEdges(int delay)
     {
-        if (_hWnd != IntPtr.Zero)
+        Application.DoEvents();
+        if (delay > 0)
         {
-            NativeMethods.DestroyWindow(_hWnd);
-            _hWnd = IntPtr.Zero;
+            Thread.Sleep(delay);
         }
+    }
+
+    private void Save()
+    {
+        _settings.ToolbarX = Left;
+        _settings.ToolbarY = Top;
+        try
+        {
+            _store.Save(_settings);
+            _saveFailed = false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _saveFailed = true;
+            if (_running)
+            {
+                LayoutButtons();
+            }
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (_running && _processing && m.Msg == 0x10)
+        {
+            _deferredClose = true;
+            return;
+        }
+        if (_running && m.Msg == 0x113 && m.WParam == 1) { Tick(); return; }
+        if (_running && m.Msg == 0x8003) { _companion.Acknowledge(); return; }
+        if (_running && m.Msg == 0x8005 && !_processing)
+        {
+            switch ((int)m.WParam)
+            {
+                case 0: _detector.SetPaused(false); _draft = null; _confirmQuit = true; break;
+                case 1: Close(); return;
+                case 2: if (_fault == null) { _detector.SetPaused(false); } break;
+                case 3: _draft = null; _confirmQuit = false; _moveOffset = null; _detector.SetPaused(true); break;
+            }
+            LayoutButtons();
+            return;
+        }
+        if (_running && (m.Msg == 0x2b1 || m.Msg == 0x218 || m.Msg == 0x7e))
+        {
+            _detector.Reset();
+            if (m.Msg == 0x2b1)
+            {
+                if ((int)m.WParam is 7 or 4 or 2)
+                {
+                    _lockedSession = true;
+                }
+
+                if ((int)m.WParam is 8 or 3 or 1)
+                {
+                    _lockedSession = false;
+                }
+            }
+            if (m.Msg == 0x7e)
+            {
+                KeepReachable();
+            }
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_running)
+        {
+            if (!_clicks.Release())
+            {
+                _fault = "Release failed · retry";
+                _draft = null;
+                _confirmQuit = false;
+                _detector.SetPaused(true);
+                LayoutButtons();
+                e.Cancel = true;
+                return;
+            }
+            if (_confirmQuit) { _companion.Quit(); }
+            _running = false;
+            NativeMethods.KillTimer(Handle, 1);
+            NativeMethods.WTSUnRegisterSessionNotification(Handle);
+            Save();
+        }
+        base.OnFormClosing(e);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { _clicks.Release(); _overlay?.Dispose(); _toggle.Dispose(); }
+        base.Dispose(disposing);
     }
 }

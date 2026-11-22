@@ -1,0 +1,207 @@
+{
+  "initial": {
+    "active": true,
+    "previous": [
+      100,
+      100
+    ],
+    "counter": 0,
+    "latched": false,
+    "clickTime": 2,
+    "moveLimit": 5,
+    "locked": "left"
+  },
+  "sampleFormat": "[screenX, screenY, optional hit target; omitted target means desktop]",
+  "cases": [
+    {
+      "name": "stationary",
+      "samples": [
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          "left"
+        ]
+      ]
+    },
+    {
+      "name": "diagonal-drift",
+      "samples": [
+        [
+          104,
+          104
+        ],
+        [
+          108,
+          108
+        ],
+        [
+          112,
+          112
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          "left"
+        ]
+      ]
+    },
+    {
+      "name": "exact-boundary",
+      "samples": [
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          95,
+          100
+        ],
+        [
+          95,
+          100
+        ],
+        [
+          95,
+          100
+        ],
+        [
+          95,
+          100
+        ]
+      ],
+      "expected": [
+        [
+          6,
+          "left"
+        ]
+      ]
+    },
+    {
+      "name": "rearm-y",
+      "samples": [
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          100
+        ],
+        [
+          100,
+          104
+        ],
+        [
+          100,
+          109
+        ],
+        [
+          100,
+          109
+        ],
+        [
+          100,
+          109
+        ],
+        [
+          100,
+          109
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          "left"
+        ],
+        [
+          8,
+          "left"
+        ]
+      ]
+    },
+    {
+      "name": "pause-resume",
+      "samples": [
+        [
+          100,
+          100,
+          "toggle"
+        ],
+        [
+          100,
+          100,
+          "toggle"
+        ],
+        [
+          100,
+          100,
+          "toggle"
+        ],
+        [
+          130,
+          100
+        ],
+        [
+          100,
+          100,
+          "toggle"
+        ],
+        [
+          101,
+          100,
+          "toggle"
+        ],
+        [
+          103,
+          100,
+          "toggle"
+        ],
+        [
+          103,
+          100,
+          "toggle"
+        ]
+      ],
+      "expected": [
+        [
+          3,
+          "pause"
+        ],
+        [
+          8,
+          "resume"
+        ]
+      ]
+    }
+  ]
+}

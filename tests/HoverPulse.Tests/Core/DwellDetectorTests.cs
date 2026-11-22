@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HoverPulse.Core;
 using HoverPulse.Interop;
 
@@ -5,119 +6,55 @@ namespace HoverPulse.Tests.Core;
 
 public class DwellDetectorTests
 {
-    [Fact]
-    public void OnCursorMoved_WithinTolerance_RaisesDwellProgress()
+    public static IEnumerable<object[]> Fixtures()
     {
-        using var detector = new DwellDetector { DwellTimeMs = 1000, ToleranceRadius = 10 };
-        var progressRaised = false;
-
-        detector.DwellProgress += (_, _) => progressRaised = true;
-
-        // First call starts the dwell
-        detector.OnCursorMoved(new POINT(100, 100));
-        // Second call within tolerance should raise progress
-        detector.OnCursorMoved(new POINT(102, 102));
-
-        progressRaised.Should().BeTrue();
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "naturalpoint-sample-cases.json")));
+        foreach (var item in doc.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            yield return [item.GetProperty("name").GetString()!, item.Clone()];
+        }
     }
 
-    [Fact]
-    public void OnCursorMoved_OutsideTolerance_RaisesDwellCancelled()
+    [Theory, MemberData(nameof(Fixtures))]
+    public void Replay(string name, JsonElement trace)
     {
-        using var detector = new DwellDetector { DwellTimeMs = 1000, ToleranceRadius = 10 };
-        var cancelled = false;
-
-        detector.DwellCancelled += () => cancelled = true;
-
-        detector.OnCursorMoved(new POINT(100, 100));
-        detector.OnCursorMoved(new POINT(100, 100)); // Start dwelling
-        detector.OnCursorMoved(new POINT(200, 200)); // Move far away
-
-        cancelled.Should().BeTrue();
+        var detector = new DwellDetector();
+        detector.Sample(new POINT(100, 100), false);
+        List<string> actual = [];
+        int tick = 0;
+        foreach (var sample in trace.GetProperty("samples").EnumerateArray())
+        {
+            tick++;
+            bool toggle = sample.GetArrayLength() == 3;
+            if (detector.Sample(new POINT(sample[0].GetInt32(), sample[1].GetInt32()), toggle))
+            {
+                actual.Add($"{tick} {(toggle ? (detector.Paused ? "pause" : "resume") : "left")}");
+            }
+        }
+        Assert.Equal(trace.GetProperty("expected").EnumerateArray().Select(x => $"{x[0]} {x[1]}"), actual);
+        Assert.False(string.IsNullOrEmpty(name));
     }
 
-    [Fact]
-    public void OnCursorMoved_WhenPaused_DoesNotRaiseEvents()
+    [Theory, InlineData(1), InlineData(2), InlineData(50)]
+    public void TimerLimitsAndRearm(int threshold)
     {
-        using var detector = new DwellDetector { DwellTimeMs = 1, ToleranceRadius = 10, IsPaused = true };
-        var anyEvent = false;
+        var detector = new DwellDetector { ClickTime = threshold };
+        var point = new POINT(int.MinValue, int.MaxValue);
+        Assert.False(detector.Sample(point, false));
+        for (int i = 0; i < threshold; i++)
+        {
+            Assert.False(detector.Sample(point, false));
+        }
 
-        detector.DwellProgress += (_, _) => anyEvent = true;
-        detector.DwellCompleted += _ => anyEvent = true;
+        Assert.True(detector.Sample(point, false));
+        for (int i = 0; i < 600; i++)
+        {
+            Assert.False(detector.Sample(point, false));
+        }
 
-        detector.OnCursorMoved(new POINT(100, 100));
-        detector.OnCursorMoved(new POINT(100, 100));
-        Thread.Sleep(10);
-        detector.Tick();
-
-        anyEvent.Should().BeFalse();
-    }
-
-    [Fact]
-    public void OnCursorMoved_WhenDisabled_DoesNotRaiseEvents()
-    {
-        using var detector = new DwellDetector { DwellTimeMs = 1, ToleranceRadius = 10, IsEnabled = false };
-        var anyEvent = false;
-
-        detector.DwellProgress += (_, _) => anyEvent = true;
-        detector.DwellCompleted += _ => anyEvent = true;
-
-        detector.OnCursorMoved(new POINT(100, 100));
-        detector.OnCursorMoved(new POINT(100, 100));
-        Thread.Sleep(10);
-        detector.Tick();
-
-        anyEvent.Should().BeFalse();
-    }
-
-    [Fact]
-    public void Tick_AfterDwellTimeElapsed_RaisesDwellCompleted()
-    {
-        using var detector = new DwellDetector { DwellTimeMs = 10, ToleranceRadius = 10 };
-        var completed = false;
-        POINT completedAt = default;
-
-        detector.DwellCompleted += p => { completed = true; completedAt = p; };
-
-        detector.OnCursorMoved(new POINT(100, 100));
-        Thread.Sleep(50); // Wait longer than dwell time
-        detector.Tick();
-
-        completed.Should().BeTrue();
-        completedAt.X.Should().Be(100);
-        completedAt.Y.Should().Be(100);
-    }
-
-    [Fact]
-    public void Tick_DoesNotFireTwice_ForSameDwell()
-    {
-        using var detector = new DwellDetector { DwellTimeMs = 10, ToleranceRadius = 10 };
-        var completedCount = 0;
-
-        detector.DwellCompleted += _ => completedCount++;
-
-        detector.OnCursorMoved(new POINT(100, 100));
-        Thread.Sleep(50);
-        detector.Tick();
-        detector.Tick();
-        detector.Tick();
-
-        completedCount.Should().Be(1);
-    }
-
-    [Fact]
-    public void Reset_CancelsDwell()
-    {
-        using var detector = new DwellDetector { DwellTimeMs = 10, ToleranceRadius = 10 };
-        var completed = false;
-
-        detector.DwellCompleted += _ => completed = true;
-
-        detector.OnCursorMoved(new POINT(100, 100));
+        point.X = int.MaxValue;
+        Assert.False(detector.Sample(point, false));
         detector.Reset();
-        Thread.Sleep(50);
-        detector.Tick();
-
-        completed.Should().BeFalse();
+        Assert.False(detector.Sample(point, false));
     }
 }

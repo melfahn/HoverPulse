@@ -3,98 +3,86 @@ using HoverPulse.Interop;
 
 namespace HoverPulse.Core;
 
-/// <summary>
-/// The type of mouse click to simulate.
-/// </summary>
-internal enum ClickType
-{
-    LeftClick,
-    RightClick,
-    DoubleClick,
-    DragStart,
-    DragEnd
-}
+internal enum ClickType { LeftClick, RightClick, DoubleClick, DragStart, DragEnd }
 
-/// <summary>
-/// Simulates mouse clicks at the current cursor position using SendInput.
-/// </summary>
-internal static class ClickSimulator
+internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wait)
 {
-    /// <summary>
-    /// Simulates a mouse click of the specified type at the current cursor position.
-    /// </summary>
-    public static void SimulateClick(ClickType clickType)
+    private bool _busy;
+    private uint _ownedUp;
+    private bool _ownedBackend;
+    public bool Holding => _ownedUp != 0;
+
+    public static bool NativeEdge(uint flag, bool alternate)
     {
-        var inputs = clickType switch
+        if (!alternate)
         {
-            ClickType.LeftClick => CreateLeftClick(),
-            ClickType.RightClick => CreateRightClick(),
-            ClickType.DoubleClick => CreateDoubleClick(),
-            ClickType.DragStart => CreateMouseDown(isLeft: true),
-            ClickType.DragEnd => CreateMouseUp(isLeft: true),
-            _ => throw new ArgumentOutOfRangeException(nameof(clickType))
-        };
-
-        var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
-        if (sent != (uint)inputs.Length)
-        {
-            // SendInput may fail silently due to UIPI when targeting elevated windows.
-            // We don't throw here — just log or ignore for now.
+            NativeMethods.mouse_event(flag, 0, 0, 0, 0);
+            return true; // Legacy API has no delivery receipt.
         }
+        var input = new INPUT { MouseInput = new MOUSEINPUT { Flags = flag } };
+        return NativeMethods.SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
     }
 
-    private static INPUT[] CreateLeftClick()
+    public bool Dispatch(ClickType action, bool alternate)
     {
-        return
-        [
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTDOWN),
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTUP)
-        ];
-    }
-
-    private static INPUT[] CreateRightClick()
-    {
-        return
-        [
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_RIGHTDOWN),
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_RIGHTUP)
-        ];
-    }
-
-    private static INPUT[] CreateDoubleClick()
-    {
-        return
-        [
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTDOWN),
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTUP),
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTDOWN),
-            CreateMouseInput(NativeMethods.MOUSEEVENTF_LEFTUP)
-        ];
-    }
-
-    private static INPUT[] CreateMouseDown(bool isLeft)
-    {
-        var flag = isLeft ? NativeMethods.MOUSEEVENTF_LEFTDOWN : NativeMethods.MOUSEEVENTF_RIGHTDOWN;
-        return [CreateMouseInput(flag)];
-    }
-
-    private static INPUT[] CreateMouseUp(bool isLeft)
-    {
-        var flag = isLeft ? NativeMethods.MOUSEEVENTF_LEFTUP : NativeMethods.MOUSEEVENTF_RIGHTUP;
-        return [CreateMouseInput(flag)];
-    }
-
-    private static INPUT CreateMouseInput(uint flags)
-    {
-        return new INPUT
+        if (_busy || (Holding && action != ClickType.DragEnd) || (!Holding && action == ClickType.DragEnd))
         {
-            Type = INPUT.INPUT_MOUSE,
-            MouseInput = new MOUSEINPUT
+            return false;
+        }
+
+        _busy = true;
+        try
+        {
+            if (action == ClickType.DragEnd)
             {
-                Flags = flags,
-                Time = 0,
-                ExtraInfo = 0
+                return Release();
             }
-        };
+
+            uint down = action == ClickType.RightClick ? NativeMethods.MOUSEEVENTF_RIGHTDOWN : NativeMethods.MOUSEEVENTF_LEFTDOWN;
+            int pairs = action == ClickType.DoubleClick ? 2 : 1;
+            for (int i = 0; i < pairs; i++)
+            {
+                if (!emit(down, alternate))
+                {
+                    return false;
+                }
+
+                _ownedUp = down << 1;
+                _ownedBackend = alternate;
+                if (action == ClickType.DragStart)
+                {
+                    return true;
+                }
+
+                wait(alternate ? 100 : 0);
+                if (!Release())
+                {
+                    return false;
+                }
+
+                if (i + 1 < pairs)
+                {
+                    wait(alternate ? 100 : 0);
+                }
+            }
+            return true;
+        }
+        finally { _busy = false; }
+    }
+
+    public bool Release()
+    {
+        if (!Holding)
+        {
+            return true;
+        }
+
+        if (!emit(_ownedUp, _ownedBackend))
+        {
+            return false;
+        }
+
+        _ownedUp = 0;
+        return true;
     }
 }
