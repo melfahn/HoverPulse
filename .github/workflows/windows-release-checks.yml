@@ -52,20 +52,15 @@ jobs:
         run: dotnet test tests/HoverPulse.Tests/HoverPulse.Tests.csproj -c Release --arch ($env:RID.Split('-')[1]) --logger "trx;LogFileName=isolated.trx" --results-directory artifacts/receipts
       - name: Check both click backends on the runner desktop
         shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected a disposable hosted runner' }
-          $exe = (Get-Item artifacts/publish/HoverPulse.exe).FullName
-          $build = Get-Content artifacts/receipts/build.json -Raw | ConvertFrom-Json
-          $hash = ($build.Files | Where-Object Name -eq HoverPulse.exe).SHA256
-          $profileDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) HoverPulse
-          foreach ($backend in 'legacy','alternate') {
-            $out = "artifacts/receipts/$backend"
-            & tests/WindowsRelease/Test-GuestDelivery.ps1 -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -Alternate:($backend -eq 'alternate') -CheckForcedExit
-            $receipt = Get-Content "$out/delivery.json" -Raw | ConvertFrom-Json
-            if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or $receipt.LeftDownAfterKill -ne $false) { throw "Invalid $backend delivery receipt" }
-            Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend")
-          }
+        run: ./tests/WindowsRelease/Invoke-HostedDelivery.ps1
+      - name: Keep the tested ARM64 bundle
+        if: success() && matrix.rid == 'win-arm64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tested-win-arm64
+          path: artifacts/publish
+          if-no-files-found: error
+          retention-days: 7
       - name: Keep test receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
