@@ -10,6 +10,7 @@ param(
     [switch]$Alternate,
     [switch]$CheckOrderlyExit,
     [switch]$CheckForcedExit,
+    [switch]$CheckReconnect,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -132,6 +133,23 @@ try {
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
         }
     } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
+    if ($CheckReconnect) {
+        Select-Mode 'Pause' 1000
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'paused before RDP disconnect' ''
+        @{ProcessId=$app.Id; SessionId=$session; Width=[Windows.Forms.Screen]::PrimaryScreen.Bounds.Width} |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'ready-for-reconnect.json')
+        $reconnect = [Diagnostics.Stopwatch]::StartNew()
+        while (!(Test-Path -LiteralPath (Join-Path $out 'reconnected'))) {
+            if ($app.HasExited -or $reconnect.Elapsed.TotalMinutes -ge 4) { throw 'RDP reconnect did not complete.' }
+            [ReleaseReceiver]::Pump(100)
+        }
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'paused across reconnect' ''
+        Select-Mode 'Resume' 1000 4
+        $receiver.Hold($receiver.Handle,30,1200)
+        Check-Edges 'first dwell after RDP reconnect' 'LD,LU'
+    }
     if ($CheckOrderlyExit) {
         $duplicate = Start-Process -FilePath $exe.FullName -PassThru
         try {
@@ -175,7 +193,7 @@ finally {
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
-       LeftDownAfterKill=$heldAfterKill } |
+       LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     $receiver.Dispose()
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($false) }
