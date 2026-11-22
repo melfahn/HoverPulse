@@ -1,0 +1,76 @@
+name: Windows release checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [naturalpoint-parity]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'specs/naturalpoint-sample-cases.json'
+      - '.github/workflows/windows-release-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            rid: win-x64
+          - runner: windows-11-arm
+            rid: win-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      RID: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build and identify the candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = $env:RID.Split('-')[1]
+          if ($env:RUNNER_ARCH.ToLowerInvariant() -ne $expected) { throw 'Runner architecture mismatch' }
+          dotnet publish src/HoverPulse/HoverPulse.csproj -c Release -r $env:RID --self-contained true -p:PublishSingleFile=true -o artifacts/publish
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory artifacts/receipts | Out-Null
+          $files = Get-ChildItem artifacts/publish -File | ForEach-Object {
+            [ordered]@{ Name=$_.Name; SHA256=(Get-FileHash -LiteralPath $_.FullName).Hash }
+          }
+          [ordered]@{ Commit=$env:GITHUB_SHA; Runner=$env:RUNNER_ARCH; Windows=(Get-CimInstance Win32_OperatingSystem).BuildNumber; Files=@($files) } |
+            ConvertTo-Json -Depth 4 | Set-Content artifacts/receipts/build.json
+      - name: Run the isolated Windows suite
+        run: dotnet test tests/HoverPulse.Tests/HoverPulse.Tests.csproj -c Release --arch ($env:RID.Split('-')[1]) --logger "trx;LogFileName=isolated.trx" --results-directory artifacts/receipts
+      - name: Check both click backends on the runner desktop
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Expected a disposable hosted runner' }
+          $exe = (Get-Item artifacts/publish/HoverPulse.exe).FullName
+          $build = Get-Content artifacts/receipts/build.json -Raw | ConvertFrom-Json
+          $hash = ($build.Files | Where-Object Name -eq HoverPulse.exe).SHA256
+          $profileDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) HoverPulse
+          foreach ($backend in 'legacy','alternate') {
+            $out = "artifacts/receipts/$backend"
+            & tests/WindowsRelease/Test-GuestDelivery.ps1 -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -Alternate:($backend -eq 'alternate') -CheckForcedExit
+            $receipt = Get-Content "$out/delivery.json" -Raw | ConvertFrom-Json
+            if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or $receipt.LeftDownAfterKill -ne $false) { throw "Invalid $backend delivery receipt" }
+            Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend")
+          }
+      - name: Keep test receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-receipts-${{ matrix.rid }}
+          path: artifacts/receipts
+          if-no-files-found: error
+          retention-days: 7
