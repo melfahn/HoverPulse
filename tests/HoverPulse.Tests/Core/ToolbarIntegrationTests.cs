@@ -138,6 +138,11 @@ public class ToolbarIntegrationTests
             Select("Cancel");
             Assert.Equal(2,settings.ClickTime);
             Assert.Equal((ToolbarTheme.Neutral,4,false,1),(settings.Theme,settings.ToolbarPadding,settings.ShowToolbarLabels,settings.AppSize));
+            var setupOrigin = form.Location;
+            Select("Setup");
+            Select("Bedroom profile");
+            Select("Cancel");
+            Assert.Equal(setupOrigin, form.Location);
             Select("Setup");
             Select("Time +");
             Select("Theme");

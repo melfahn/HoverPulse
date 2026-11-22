@@ -164,6 +164,10 @@ $Receiver.HoldScreenPoint($Receiver.Handle,($point.X+$dx),($point.Y+$dy),1500)
 $null=Find-Control 'Move'
 $afterMove=[ReleaseReceiver]::ScreenBounds($Window)
 if ($afterMove.X-$beforeMove.X -ne $dx -or $afterMove.Y-$beforeMove.Y -ne $dy) { throw 'Move/Place did not preserve the pointer offset.' }
+Select-Control 'Setup'
+Select-Control 'Bedroom profile'
+Select-Control 'Cancel'
+if (!$afterMove.Equals([ReleaseReceiver]::ScreenBounds($Window))) { throw 'Cancelling the profile reset changed the toolbar bounds.' }
 Select-Control 'Exit'
 Select-Control 'Cancel'
 $null=Find-Control 'Pause'

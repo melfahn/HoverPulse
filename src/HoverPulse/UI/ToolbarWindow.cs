@@ -13,6 +13,7 @@ internal sealed class ToolbarWindow : Form
     private readonly SettingsService _store;
     private AppSettings _settings;
     private AppSettings? _draft;
+    private Point _positionBeforeSetup;
     private readonly DwellDetector _detector = new();
     private readonly ActionSelection _selection = new();
     private readonly ClickSimulator _clicks;
@@ -209,6 +210,7 @@ internal sealed class ToolbarWindow : Form
 
     private void OpenOptions()
     {
+        _positionBeforeSetup = Location;
         _draft = _settings.Copy();
         _draft.ToolbarX = Left;
         _draft.ToolbarY = Top;
@@ -248,7 +250,7 @@ internal sealed class ToolbarWindow : Form
         Add("Cancel", () =>
         {
             _draft = null;
-            Location = new Point(draft.ToolbarX, draft.ToolbarY);
+            Location = _positionBeforeSetup;
             LayoutButtons();
         });
     }
