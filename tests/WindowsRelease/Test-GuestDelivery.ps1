@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory)][ValidateSet('Reference','Candidate')][string]$Product,
     [Parameter(Mandatory)][string]$Executable,
     [Parameter(Mandatory)][string]$OutputDirectory,
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedSHA256,
     [switch]$Alternate,
     [switch]$CheckOrderlyExit,
     [switch]$CheckForcedExit,
@@ -54,8 +55,10 @@ if (Get-Process -Name DwellClicker,HoverPulse -ErrorAction SilentlyContinue | Wh
 }
 $exe = Get-Item -LiteralPath $Executable
 $hash = (Get-FileHash -LiteralPath $exe.FullName).Hash
+if ($ExpectedSHA256 -and $hash -ne $ExpectedSHA256) { throw 'The staged executable differs from the expected build.' }
 $isReference = $Product -eq 'Reference'
 if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
+if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($isReference -and $hash -ne 'CB8D235299FFAB67C950DC6D96B00CBD269C0691B43CADE368C7735F5B95CA15') {
     throw 'Reference hash mismatch.'
@@ -172,6 +175,7 @@ try {
         if ($isReference) { throw 'Design checks require the Hover Click candidate.' }
         & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -ExpectedDpi $ExpectedDpi
         Check-Edges 'internal design and Setup actions' ''
+        if (!$app.WaitForExit(5000) -or $app.ExitCode -ne 0) { throw 'Confirmed hands-free exit failed.' }
     }
     if ($CheckReconnect) {
         Select-Mode 'Pause' 1000

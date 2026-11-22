@@ -68,6 +68,29 @@ function Read-Face([int]$Size,[int]$Theme,[bool]$Labels,[int]$Padding) {
     }
     $receipts.Add([pscustomobject]@{Dpi=$dpi;Size=$Size;Theme=$Theme;Labels=$Labels;Padding=$Padding;Width=$widthPx;Height=$heightPx})
 }
+# Double-dwell locking and held drag have distinct paint and Windows button state.
+Select-Control 'Right'
+Select-Control 'Right'
+$shell = [ReleaseReceiver]::ScreenBounds($Window)
+$right = [ReleaseReceiver]::ScreenBounds((Find-Control 'Right'))
+$bitmap = [ReleaseReceiver]::CaptureWindow($Window)
+try { Check-Pixel $bitmap ($right.Left-$shell.Left+7) ($right.Top-$shell.Top+12) $lockedFills[0] } finally { $bitmap.Dispose() }
+Select-Control 'Left'
+Select-Control 'Left'
+Select-Control 'Drag'
+$Receiver.Hold($Receiver.Handle,0,1200)
+if (($Receiver.Edges -join ',') -ne 'LD' -or ![ReleaseReceiver]::LeftDown()) { throw 'Paint test failed to acquire drag.' }
+$Receiver.Edges.Clear()
+$drag = [ReleaseReceiver]::ScreenBounds((Find-Control 'Drag'))
+$bitmap = [ReleaseReceiver]::CaptureWindow($Window)
+try {
+    Check-Pixel $bitmap ($drag.Left-$shell.Left+7) ($drag.Top-$shell.Top+12) 'F4F4F4'
+    $bitmap.Save((Join-Path $OutputDirectory "held-drag-$dpi.png"),[Drawing.Imaging.ImageFormat]::Png)
+} finally { $bitmap.Dispose() }
+$Receiver.Hold($Receiver.Handle,30,1200)
+if (($Receiver.Edges -join ',') -ne 'LU' -or [ReleaseReceiver]::LeftDown()) { throw 'Paint test failed to drop the drag.' }
+$Receiver.Edges.Clear()
+
 foreach ($size in 1,2,3,0) {
     foreach ($theme in 0,1,2) {
         foreach ($labels in $false,$true) {
@@ -97,5 +120,20 @@ if (!$anchor.Equals($resume)) { throw 'Resume moved on collapse.' }
 # Do not hover a shell gap while paused: off-toggle samples must stay frozen.
 $Receiver.Hold((Find-Control 'Resume'),4,1200)
 $null=Find-Control 'Move'
+$beforeMove=[ReleaseReceiver]::ScreenBounds($Window)
+Select-Control 'Move'
+$null=Find-Control 'Place'
+$point=[Windows.Forms.Cursor]::Position
+$dx=Scale 44
+$dy=Scale 100
+$Receiver.HoldScreenPoint($Receiver.Handle,($point.X+$dx),($point.Y+$dy),1500)
+$null=Find-Control 'Move'
+$afterMove=[ReleaseReceiver]::ScreenBounds($Window)
+if ($afterMove.X-$beforeMove.X -ne $dx -or $afterMove.Y-$beforeMove.Y -ne $dy) { throw 'Move/Place did not preserve the pointer offset.' }
+Select-Control 'Exit'
+Select-Control 'Cancel'
+$null=Find-Control 'Pause'
+Select-Control 'Exit'
+Select-Control 'Exit Hover Click'
 if ($Receiver.Edges.Count) { throw 'Internal toolbar operations delivered a desktop click.' }
 $receipts | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'design.json')
