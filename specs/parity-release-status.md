@@ -4,7 +4,9 @@
 
 The same application source also passed on a real Windows 11 ARM64 runner (build 26200) and a Windows Server x64 runner (build 26100). Each ran all 24 isolated tests and delivered the expected receiver events on both input backends. Forced termination of the toolbar released the held drag and cleared the Windows left-button state in all four native runs. The retained ARM64 bundle has executable SHA-256 `0D19D9BAE04795A2FFF7E0C341613575F93F64E30F4CFC0C2A89FE43FC95E726`. The independently built hosted x64 executable was `DEE700B4EB14950F4682551CB2B47AD1939DB2014118BB90AA30E1522B9FB4D9`. [Windows release checks and receipts](https://github.com/melfahn/HoverPulse/actions/runs/45060632776)
 
-## Previous candidate under endurance test
+**The eight-hour release gate remains open.** Two earlier builds missed a drag release after Resume. The settings fix does not change drag dispatch. Diagnose the missed release, then repeat the native recovery checks and uninterrupted soak on the exact release executable.
+
+## Previous candidate endurance result
 
 Build `caa0e23`, x64 SHA-256 `A2D5942B2926AD4EEABCD9DE30315FC06119951E2BF2A045462BD400A40D404B`, samples the cursor in NaturalPoint's DPI-unaware coordinate space and uses the physical cursor for toolbar targets. All 24 isolated tests passed before the profile-reset regression was added. The Windows x64 and ARM64 publish directories have per-file manifests.
 
@@ -14,7 +16,7 @@ A single interactive Windows login exposed two simultaneous RDP displays at diff
 
 With the executable and its positive-control receiver running at verified low integrity, neither backend delivered input to the foreground medium-integrity receiver. Both subsequently delivered exactly one down/up pair to the equal-integrity receiver. Neither displayed a failure cue during the blocked attempt. These observations cover low-to-medium isolation. The test did not grant UIAccess or elevate a test user.
 
-The elapsed-time soak on the revised executable uses the captured legacy-backend settings. Its result requires the final receiver trace and process-identity audit.
+The eight-hour test of `caa0e23` ended after 11,085.8 seconds (3 h 4 min 46 s) using the captured legacy-backend settings. An independent trace audit verified all 8,630 expected button events in the first 863 cycles. In cycle 864 the receiver saw drag-down, the runner dwelled on Pause and Resume, and the expected final left-up was missing. Windows still reported the left button held before cleanup. The pointer was at the expected drop destination and the toolbar had expanded to its full width. Reading its control text timed out. The final cycle's successive target placements were 1.10–1.23 seconds apart. The trace establishes a missed release within the observation interval. Its cause remains open.
 
 The first redesigned executable (`016eece`, x64 SHA-256 `459854BD3A16600AB7715C20533BC58BCFFA6ABA634858F22C44971D51CA989A`) passed 23 isolated tests, the full hands-free presentation sequence at measured 96 and 144 DPI, authenticated reconnect, and both drag-exit checks on both backends. All 48 appearance combinations matched their expected target bounds and palette samples. Both presentation runs covered saved and cancelled padding, mode locking, held drag, anchored Resume, Move/Place and confirmed Exit, with zero stray receiver clicks.
 
