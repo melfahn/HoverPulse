@@ -53,11 +53,11 @@ jobs:
       - name: Check both click backends on the runner desktop
         shell: powershell
         run: ./tests/WindowsRelease/Invoke-HostedDelivery.ps1
-      - name: Keep the tested ARM64 bundle
-        if: success() && matrix.rid == 'win-arm64'
+      - name: Keep the tested candidate bundle
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tested-win-arm64
+          name: tested-${{ matrix.rid }}
           path: artifacts/publish
           if-no-files-found: error
           retention-days: 7

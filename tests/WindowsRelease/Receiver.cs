@@ -13,6 +13,8 @@ public sealed class ReleaseReceiver : Form
     public readonly List<string> Trace = new List<string>();
     public readonly List<int> SessionEvents = new List<int>();
     public readonly List<string> DelayedHolds = new List<string>();
+    public readonly List<string> DragTimeline = new List<string>();
+    public bool TraceDrag;
     readonly Stopwatch clock = Stopwatch.StartNew();
     public ReleaseReceiver()
     {
@@ -34,10 +36,22 @@ public sealed class ReleaseReceiver : Form
         if (edge != null)
         {
             Edges.Add(edge);
+            if (TraceDrag) { MarkDrag("edge " + edge + " leftDown=" + LeftDown()); }
             Trace.Add(String.Format("{0:F3} {1} {2} {3}", clock.Elapsed.TotalMilliseconds, edge,
                 (short)msg.LParam.ToInt64(), (short)(msg.LParam.ToInt64() >> 16)));
         }
         base.WndProc(ref msg);
+    }
+
+    public void MarkDrag(string phase)
+    {
+        DragTimeline.Add(Stopwatch.GetTimestamp() + " " + phase);
+    }
+
+    public static bool Responds(IntPtr window)
+    {
+        UIntPtr result;
+        return SendMessageTimeoutW(window, 0, UIntPtr.Zero, null, 2, 50, out result) != IntPtr.Zero;
     }
 
     public void Hold(IntPtr handle, int offsetX, int milliseconds)
@@ -69,6 +83,7 @@ public sealed class ReleaseReceiver : Form
         Point physical;
         if (!GetPhysicalCursorPos(out physical) || physical.X != x || physical.Y != y)
             throw new InvalidOperationException("Test pointer differs from the requested physical screen point.");
+        if (TraceDrag) { MarkDrag(String.Format("placed x={0} y={1} hwnd={2}", x, y, handle)); }
         Pump(milliseconds);
         double elapsed = clock.Elapsed.TotalMilliseconds - start;
         if (elapsed - milliseconds >= 250)

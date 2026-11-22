@@ -314,6 +314,7 @@ internal sealed class ToolbarWindow : Form
 
     private void Toggle(bool fromDwell)
     {
+        if (_clicks.Holding && DragTrace.Enabled) { DragTrace.Write($"toggle-enter paused={_detector.Paused}"); }
         if (_fault != null)
         {
             if (!_clicks.Release()) { _detector.SetPaused(true); return; }
@@ -326,6 +327,7 @@ internal sealed class ToolbarWindow : Form
         }
 
         LayoutButtons();
+        if (_clicks.Holding && DragTrace.Enabled) { DragTrace.Write($"toggle-complete paused={_detector.Paused}"); }
     }
 
     internal void Tick()
@@ -356,6 +358,10 @@ internal sealed class ToolbarWindow : Form
                 return;
             }
             var hwnd = NativeMethods.WindowFromPoint(p);
+            if (_clicks.Holding && DragTrace.Enabled)
+            {
+                DragTrace.Write($"sample x={p.X} y={p.Y} hit={hwnd} stable={sample.Stable} paused={_detector.Paused}");
+            }
             if (hwnd == 0) { _detector.Reset(); return; }
             var hit = Control.FromHandle(hwnd);
             var button = hit as ToolbarButton;
@@ -394,7 +400,11 @@ internal sealed class ToolbarWindow : Form
             {
                 bool hadOverride = _selection.Temporary.HasValue;
                 var next = _selection.Next;
-                if (!_clicks.Dispatch(next, _settings.AlternateInput))
+                bool drag = next is ClickType.DragStart or ClickType.DragEnd;
+                if (drag && DragTrace.Enabled) { DragTrace.Write($"dispatch-enter action={next}"); }
+                bool sent = _clicks.Dispatch(next, _settings.AlternateInput);
+                if (drag && DragTrace.Enabled) { DragTrace.Write($"dispatch-complete action={next} success={sent}"); }
+                if (!sent)
                 {
                     _fault = "Input failed · resume";
                     _detector.SetPaused(true);
@@ -404,7 +414,7 @@ internal sealed class ToolbarWindow : Form
                     _selection.Completed(next);
                 }
 
-                if (_fault != null || next is ClickType.DragStart or ClickType.DragEnd || hadOverride)
+                if (_fault != null || drag || hadOverride)
                 {
                     LayoutButtons();
                 }

@@ -11,6 +11,7 @@ param(
     [switch]$Alternate,
     [switch]$CheckOrderlyExit,
     [switch]$CheckForcedExit,
+    [switch]$TraceDrag,
     [switch]$CheckReconnect,
     [switch]$CheckLock,
     [switch]$CheckMonitorRemoval,
@@ -102,11 +103,15 @@ if ($isReference) {
 # Screen placement uses physical pixels. Boundary checks request and verify reference-space offsets.
 $previousDpi = [ReleaseReceiver]::EnterPerMonitorDpi()
 $receiver = New-Object ReleaseReceiver
+$receiver.TraceDrag = $TraceDrag.IsPresent
+$traceVariable = 'HOVERPULSE_DRAG_TRACE_DIRECTORY'
+$dropObservation = $null
 if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
     $receiver.Bounds = if ($CheckMixedDpi -or $CheckMonitorRemoval) { [Windows.Forms.SystemInformation]::VirtualScreen } else { [Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
 }
 $app = $null
+$start = $null
 $passed = $false
 $heldAfterKill = $null
 $cycles = 0
@@ -120,18 +125,23 @@ try {
     [ReleaseReceiver]::Pump(250)
     $receiver.Hold($receiver.Handle,-48,100)
     $receiver.TopMost = $false
+    if ($RestrictedPeer -or $TraceDrag) {
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = $exe.FullName
+        $start.UseShellExecute = $false
+        if ($TraceDrag) { $start.EnvironmentVariables[$traceVariable] = $out }
+    }
     if ($RestrictedPeer) {
         $lowTemp = Join-Path $env:USERPROFILE ('AppData\LocalLow\HoverClick-QA\' + [Guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $lowTemp -Force
         & icacls $lowTemp /setintegritylevel '(OI)(CI)L' | Out-Null
         if ($LASTEXITCODE) { throw 'Could not prepare the confined runtime directory.' }
-        $start = New-Object Diagnostics.ProcessStartInfo
-        $start.FileName = $exe.FullName
-        $start.UseShellExecute = $false
         $start.WorkingDirectory = $lowTemp
         $start.EnvironmentVariables['TEMP'] = $lowTemp
         $start.EnvironmentVariables['TMP'] = $lowTemp
         $start.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] = $lowTemp
+    }
+    if ($start) {
         $app = [Diagnostics.Process]::Start($start)
     } else {
         $app = Start-Process -FilePath $exe.FullName -PassThru
@@ -183,7 +193,25 @@ try {
         Check-Edges 'paused dwell during drag' ''
         Select-Mode 'Resume' 1000 4
         $receiver.Hold($receiver.Handle,30,1200)
+        $heldAtDeadline = [ReleaseReceiver]::LeftDown()
+        if ($TraceDrag) { $receiver.MarkDrag("drop-deadline cycle=$($cycles+1) leftDown=$heldAtDeadline") }
+        if (!$receiver.Edges.Count -and $TraceDrag) {
+            # Hold the destination and keep pumping before cleanup. The normal deadline still fails.
+            $late = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $held = [ReleaseReceiver]::LeftDown()
+                $responsive = [ReleaseReceiver]::Responds($window)
+                $receiver.MarkDrag("late-probe leftDown=$held uiResponsive=$responsive")
+                [ReleaseReceiver]::Pump(75)
+            } until ($receiver.Edges.Count -or $late.Elapsed.TotalSeconds -ge 3)
+            $dropObservation = [ordered]@{
+                LeftDownAtDeadline=$heldAtDeadline; LeftDownAfterObservation=[ReleaseReceiver]::LeftDown();
+                EdgesAfterDeadline=@($receiver.Edges); ObservationMilliseconds=$late.ElapsedMilliseconds
+            }
+            throw "Cycle $cycles, drop after resume: expected [LU], received [] at the deadline."
+        }
         Check-Edges 'drop after resume' 'LU'
+        if ($heldAtDeadline) { throw "Cycle $cycles, Windows still reports a held left button at the drop deadline." }
         $cycles++
         if ($cycles -eq 1 -or $cycles % 10 -eq 0) {
             @{Cycles=$cycles; ElapsedSeconds=$endurance.Elapsed.TotalSeconds; Utc=[DateTime]::UtcNow.ToString('o')} |
@@ -336,6 +364,7 @@ try {
 catch {
     $failure = $_
     $detail = [ordered]@{Error=$failure.Exception.Message; Cycle=$cycles; Utc=[datetime]::UtcNow.ToString('o')}
+    if ($dropObservation) { $detail.DropObservation = $dropObservation }
     try {
         $detail.WindowsLeftDown = [ReleaseReceiver]::LeftDown()
         $detail.Pointer = [Windows.Forms.Cursor]::Position.ToString()
@@ -363,6 +392,10 @@ finally {
         if (!$app.WaitForExit(2500)) { $app.Kill(); $app.WaitForExit() }
     }
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)
+    if ($TraceDrag) {
+        $receiver.DragTimeline | Set-Content -LiteralPath (Join-Path $out 'receiver-drag.log')
+        [Diagnostics.Stopwatch]::Frequency | Set-Content -LiteralPath (Join-Path $out 'qpc-frequency.txt')
+    }
     if ($receiver.DelayedHolds.Count) { $receiver.DelayedHolds | Set-Content -LiteralPath (Join-Path $out 'delayed-holds.txt') }
     @{ Product=$Product; SHA256=$hash; Passed=$passed; Host=$computer.Name; Model=$computer.Model;
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;

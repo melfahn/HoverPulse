@@ -38,6 +38,7 @@ internal sealed class DragWorker : IDisposable
         start.ArgumentList.Add(Argument);
         try { _process = Process.Start(start); }
         catch (Win32Exception) { return false; }
+        if (DragTrace.Enabled && _process != null) { DragTrace.Write($"worker-started pid={_process.Id}"); }
         return _process != null;
     }
 
@@ -52,6 +53,7 @@ internal sealed class DragWorker : IDisposable
         if (up && (_process == null || _process.HasExited))
         {
             // The toolbar only requests up after an acknowledged down.
+            DragTrace.Write("release-fallback worker-unavailable");
             return ReleaseIfHeld(alternate);
         }
         if (!up && !Prepare())
@@ -61,19 +63,23 @@ internal sealed class DragWorker : IDisposable
 
         try
         {
+            if (DragTrace.Enabled) { DragTrace.Write($"command-write up={up} alternate={alternate}"); }
             var commands = _process!.StandardInput.BaseStream;
             commands.WriteByte(up ? Up : alternate ? AlternateDown : LegacyDown);
             commands.Flush();
+            DragTrace.Write("reply-wait");
             byte[] ack = new byte[1];
             int read = _process.StandardOutput.BaseStream.ReadAsync(ack.AsMemory()).AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
             if (read == 1)
             {
+                if (DragTrace.Enabled) { DragTrace.Write($"reply-read accepted={ack[0] == 1}"); }
                 return ack[0] == 1;
             }
+            DragTrace.Write("reply-eof");
         }
-        catch (IOException) { }
-        catch (TimeoutException) { }
+        catch (IOException) { DragTrace.Write("command-io-error"); }
+        catch (TimeoutException) { DragTrace.Write("reply-timeout"); }
         Dispose(); // EOF requests release if the worker accepted down before losing its acknowledgment.
         return false;
     }
@@ -87,13 +93,15 @@ internal sealed class DragWorker : IDisposable
         bool held = false, alternate = false;
         try
         {
+            DragTrace.Write("worker-ready");
             int command;
             while ((command = commands.ReadByte()) >= 0)
             {
+                if (DragTrace.Enabled) { DragTrace.Write($"command-read code={command} held={held}"); }
                 bool accepted;
                 if (command == Up)
                 {
-                    accepted = !held || ClickSimulator.NativeEdge(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
+                    accepted = !held || Emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
                     if (accepted)
                     {
                         held = false;
@@ -102,23 +110,38 @@ internal sealed class DragWorker : IDisposable
                 else if (!held && command is LegacyDown or AlternateDown)
                 {
                     alternate = command == AlternateDown;
-                    held = ClickSimulator.NativeEdge(NativeMethods.MOUSEEVENTF_LEFTDOWN, alternate);
+                    held = Emit(NativeMethods.MOUSEEVENTF_LEFTDOWN, alternate);
                     accepted = held;
                 }
                 else { return 2; }
                 replies.WriteByte(accepted ? (byte)1 : (byte)0);
                 replies.Flush();
+                DragTrace.Write("reply-written");
             }
+            DragTrace.Write("command-eof");
         }
-        catch (IOException) { /* The toolbar may exit before reading the acknowledgment. */ }
+        catch (IOException) { DragTrace.Write("worker-io-error"); }
         finally
         {
             if (held)
             {
-                ClickSimulator.NativeEdge(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
+                DragTrace.Write("worker-cleanup-release");
+                Emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
             }
         }
         return 0;
+    }
+
+    private static bool Emit(uint flag, bool alternate)
+    {
+        if (DragTrace.Enabled) { DragTrace.Write($"native-enter flag={flag} alternate={alternate}"); }
+        bool accepted = ClickSimulator.NativeEdge(flag, alternate);
+        if (DragTrace.Enabled)
+        {
+            bool leftDown = (NativeMethods.GetAsyncKeyState(1) & 0x8000) != 0;
+            DragTrace.Write($"native-return flag={flag} accepted={accepted} leftDown={leftDown}");
+        }
+        return accepted;
     }
 
     public void Dispose()

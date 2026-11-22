@@ -22,7 +22,7 @@ try {
     $profileDir = Join-Path ([Environment]::GetFolderPath('ApplicationData')) HoverPulse
     foreach ($backend in 'legacy','alternate') {
         $out = Join-Path $receipts $backend
-        & (Join-Path $PSScriptRoot 'Test-GuestDelivery.ps1') -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -Alternate:($backend -eq 'alternate') -CheckForcedExit
+        & (Join-Path $PSScriptRoot 'Test-GuestDelivery.ps1') -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -Alternate:($backend -eq 'alternate') -TraceDrag -CheckForcedExit
         $receipt = Get-Content (Join-Path $out 'delivery.json') -Raw | ConvertFrom-Json
         if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or $receipt.LeftDownAfterKill -ne $false) { throw "Invalid $backend delivery receipt" }
         Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend")
