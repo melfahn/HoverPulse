@@ -2,6 +2,8 @@
 
 ## Contents
 
+- [NaturalPoint parity specification](naturalpoint-parity.md) and [sample cases](naturalpoint-sample-cases.json) govern the compatibility release.
+
 - `requirements.md` — v1.0 feature specification (dwell detection, click types, overlay, toolbar, etc.)
 - `research-dwell-clicking.md` — Deep research on dwell clicking technology, users, existing products, technical challenges
 - `research-head-tracking.md` — Head trackers, SmartNav history, QUHA Zono, eye trackers, market gap analysis

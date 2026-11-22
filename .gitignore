@@ -61,3 +61,7 @@ TestResults/
 coverage/
 *.coverage
 *.coveragexml
+
+# Local release binaries and receipts
+artifacts/
+/tests/WindowsRelease/TestHosts.local.psd1
