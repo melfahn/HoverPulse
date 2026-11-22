@@ -20,6 +20,23 @@ The reference is the verified x86 executable, SHA-256 `CB8D235299FFAB67C950DC6D9
 
 **Timing range correction.** The installed English dialog prints 0.1 and 2 seconds. Its initialization at 01002552–01002591 sets the time trackbar to **1–50** and the movement trackbar to **2–20**. Copied MFC42 ordinal 6111 sends trackbar range-min and range-max messages. Use the selectable range. For the user’s setting of 2, the third qualifying sample after a reset dispatches. Keep the displayed setting distinct from a guarantee of elapsed milliseconds.
 
+### Clean reference profile
+
+The profile reads in the pinned reference executable pass these fallback values when a registry value is absent. The settings-reader calls between 0x01004641 and 0x01004711 supply the defaults. Its settings names come from the executable's read-only string data.
+
+| Setting | Reference fallback | Captured compatibility profile |
+|---|---:|---:|
+| ClickTime | 10 | 2 |
+| MoveLimit | 5 | 5 |
+| DoSound | 1 | 0 |
+| AppSize | 1 | 1 |
+| FloatMode | 0 | 2 |
+| SaveX / SaveY | 355 / 0 | 980 / 24 |
+| DefaultAction | 1 | 1 |
+| ClickingType2KXP | 0 | 0 |
+
+HoverPulse deliberately starts with the captured compatibility profile. The reference fallbacks apply to missing settings before any display-dependent position adjustment.
+
 ## Implementation entry point
 
 First replace the time-dependent detector tests with a deterministic compatibility suite alongside any tests still relevant to other behavior. Pass a sampled point and hit target to a pure state transition; return an action for Program to route to either the toolbar or a recording/native backend. Keep locked mode, one-use selection, held drag, pause, repeat latch, count and previous sample explicit. Reuse the existing Win32 message loop, toolbar renderer and settings service. Use widened signed arithmetic for screen-coordinate deltas. Keep optional overlays and hotkeys independent of the core state and disabled in the reference profile unless the reference calls for them.
@@ -30,4 +47,4 @@ The companion fixtures give initial state, absolute screen coordinates and expec
 
 “100%” means every reference capability above has a named passing case, including the remaining integration and UI characterization. Compare reference and candidate separately on a disposable Windows desktop using the same scripted motions. Record the executable hashes, profile, Windows build, DPI, delivered samples, target and resulting actions. For timer jitter, establish the reference distribution on the same host before judging the candidate; require exact logical event counts and ordering. Run deterministic coverage on every build, a full Windows matrix for advertised platforms, and an eight-hour candidate soak with repeated click, drag, pause and resume cycles. The eight-hour soak is a proposed engineering threshold. Require zero unintended clicks, missed expected actions, stuck owned buttons under supported conditions, or loss of hands-free resume. Record all failures and rerun the affected matrix after repair.
 
-Before declaring full coverage, characterize the reference’s first sample after launch, defaults on a clean profile, mode changes mid-drag, modal options behavior, float/position persistence, companion availability, and failure or exit with a held button. Link each result to a test or an explicitly documented platform limit. A blocked SendInput call can report zero without identifying UIPI as the cause; legacy mouse_event has no delivery count. Use receiver-side observations for both. Release and rollback rehearsals belong on an isolated machine. Any production trial or cutover is a separate decision. [Windows input contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) · [Cursor desktop requirements](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getcursorpos)
+Before declaring full coverage, characterize the reference’s first sample after launch, first-run layout with the registry fallbacks, mode changes mid-drag, modal options behavior, float/position persistence, companion availability, and failure or exit with a held button. Link each result to a test or an explicitly documented platform limit. A blocked SendInput call can report zero without identifying UIPI as the cause; legacy mouse_event has no delivery count. Use receiver-side observations for both. Release and rollback rehearsals belong on an isolated machine. Any production trial or cutover is a separate decision. [Windows input contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) · [Cursor desktop requirements](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getcursorpos)
