@@ -26,6 +26,11 @@ try {
         $receipt = Get-Content (Join-Path $out 'delivery.json') -Raw | ConvertFrom-Json
         if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or $receipt.LeftDownAfterKill -ne $false) { throw "Invalid $backend delivery receipt" }
         Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend")
+        $out = Join-Path $receipts "$backend-orderly"
+        & (Join-Path $PSScriptRoot 'Test-GuestDelivery.ps1') -TestComputerName $env:COMPUTERNAME -Product Candidate -Executable $exe -ExpectedSHA256 $hash -OutputDirectory $out -Alternate:($backend -eq 'alternate') -TraceDrag -CheckOrderlyExit -DragHoldMilliseconds 7000
+        $receipt = Get-Content (Join-Path $out 'delivery.json') -Raw | ConvertFrom-Json
+        if (!$receipt.Passed -or $receipt.SHA256 -ne $hash -or !$receipt.CheckedOrderlyExit) { throw "Invalid $backend orderly-exit receipt" }
+        Move-Item -LiteralPath $profileDir -Destination (Join-Path $env:RUNNER_TEMP "hoverclick-profile-$backend-orderly")
     }
     # The captured profile needs several 100 ms samples to drop. A 100 ms deadline
     # deliberately fails before the native left-up and exercises recovery on this executable.

@@ -24,7 +24,7 @@ internal sealed class ToolbarWindow : Form
     private string? _lastToolbarTarget;
     private Rectangle _divider;
     private readonly ToolbarButton _toggle = new();
-    private readonly Dictionary<Button, Action> _commands = [];
+    private readonly Dictionary<Button, Action?> _commands = [];
     private OverlayWindow? _overlay;
     private Point? _moveOffset;
     private bool _processing, _confirmQuit, _running, _lockedSession;
@@ -40,7 +40,7 @@ internal sealed class ToolbarWindow : Form
         if (clicks == null)
         {
             _dragWorker = new DragWorker();
-            clicks = new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges, _dragWorker.Send);
+            clicks = new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges, _dragWorker.SendAsync);
         }
         _clicks = clicks;
         _cursor = cursor ?? CursorSample.Read;
@@ -69,7 +69,7 @@ internal sealed class ToolbarWindow : Form
         }
     }
 
-    private void Add(string label, Action action, Glyph icon = Glyph.None, bool locked = false,
+    private void Add(string label, Action? action, Glyph icon = Glyph.None, bool locked = false,
         bool queued = false, bool held = false, ToolbarButton? existing = null)
     {
         var button = existing ?? new ToolbarButton();
@@ -91,7 +91,7 @@ internal sealed class ToolbarWindow : Form
         Controls.Add(button);
     }
 
-    private void ActivateButton(Button button)
+    private async void ActivateButton(Button button)
     {
         if (_processing || !_commands.TryGetValue(button, out var command))
         {
@@ -99,15 +99,24 @@ internal sealed class ToolbarWindow : Form
         }
 
         _processing = true;
-        try { command(); }
+        try
+        {
+            if (button == _toggle) { await ToggleAsync(false); }
+            else { command!(); }
+        }
         finally
         {
-            _processing = false;
-            if (_deferredClose && !IsDisposed)
-            {
-                _deferredClose = false;
-                BeginInvoke(Close);
-            }
+            EndProcessing();
+        }
+    }
+
+    private void EndProcessing()
+    {
+        _processing = false;
+        if (_deferredClose && !IsDisposed)
+        {
+            _deferredClose = false;
+            BeginInvoke(Close);
         }
     }
 
@@ -135,7 +144,7 @@ internal sealed class ToolbarWindow : Form
         }
         else
         {
-            Add(_detector.Paused ? "Resume" : "Pause", () => Toggle(false),
+            Add(_detector.Paused ? "Resume" : "Pause", null,
                 _detector.Paused ? Glyph.Resume : Glyph.Pause, existing: _toggle);
             if (!_detector.Paused)
             {
@@ -312,12 +321,12 @@ internal sealed class ToolbarWindow : Form
         }
     }
 
-    private void Toggle(bool fromDwell)
+    private async ValueTask ToggleAsync(bool fromDwell)
     {
         if (_clicks.Holding && DragTrace.Enabled) { DragTrace.Write($"toggle-enter paused={_detector.Paused}"); }
         if (_fault != null)
         {
-            if (!_clicks.Release()) { _detector.SetPaused(true); return; }
+            if (!await _clicks.ReleaseAsync()) { _detector.SetPaused(true); return; }
             _fault = null;
             _selection.Completed(ClickType.DragEnd);
         }
@@ -330,7 +339,7 @@ internal sealed class ToolbarWindow : Form
         if (_clicks.Holding && DragTrace.Enabled) { DragTrace.Write($"toggle-complete paused={_detector.Paused}"); }
     }
 
-    internal void Tick()
+    internal async void Tick()
     {
         if (_processing || _lockedSession)
         {
@@ -390,9 +399,9 @@ internal sealed class ToolbarWindow : Form
             _overlay?.Hide();
             if (onToggle)
             {
-                Toggle(true);
+                await ToggleAsync(true);
             }
-            else if (button != null && _commands.TryGetValue(button, out var command))
+            else if (button != null && _commands.TryGetValue(button, out var command) && command != null)
             {
                 command();
             }
@@ -402,7 +411,8 @@ internal sealed class ToolbarWindow : Form
                 var next = _selection.Next;
                 bool drag = next is ClickType.DragStart or ClickType.DragEnd;
                 if (drag && DragTrace.Enabled) { DragTrace.Write($"dispatch-enter action={next}"); }
-                bool sent = _clicks.Dispatch(next, _settings.AlternateInput);
+                bool sent = await _clicks.DispatchAsync(next, _settings.AlternateInput);
+                if (IsDisposed) { return; }
                 if (drag && DragTrace.Enabled) { DragTrace.Write($"dispatch-complete action={next} success={sent}"); }
                 if (!sent)
                 {
@@ -426,12 +436,7 @@ internal sealed class ToolbarWindow : Form
         }
         finally
         {
-            _processing = false;
-            if (_deferredClose && !IsDisposed)
-            {
-                _deferredClose = false;
-                BeginInvoke(Close);
-            }
+            EndProcessing();
         }
     }
 
@@ -517,14 +522,17 @@ internal sealed class ToolbarWindow : Form
     {
         if (_running)
         {
-            if (!_clicks.Release())
+            if (_processing)
             {
-                _fault = "Release failed · retry";
-                _draft = null;
-                _confirmQuit = false;
-                _detector.SetPaused(true);
-                LayoutButtons();
+                _deferredClose = true;
                 e.Cancel = true;
+                return;
+            }
+            if (_clicks.Holding)
+            {
+                e.Cancel = true;
+                _processing = true;
+                BeginInvoke(ReleaseBeforeClosing);
                 return;
             }
             if (_confirmQuit) { _companion.Quit(); }
@@ -536,9 +544,31 @@ internal sealed class ToolbarWindow : Form
         base.OnFormClosing(e);
     }
 
+    private async void ReleaseBeforeClosing()
+    {
+        bool released;
+        try { released = await _clicks.ReleaseAsync(); }
+        finally
+        {
+            _processing = false;
+            _deferredClose = false;
+        }
+        if (IsDisposed) { return; }
+        if (released)
+        {
+            Close();
+            return;
+        }
+        _fault = "Release failed · retry";
+        _draft = null;
+        _confirmQuit = false;
+        _detector.SetPaused(true);
+        LayoutButtons();
+    }
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _clicks.Release(); _dragWorker?.Dispose(); _overlay?.Dispose(); _toggle.Dispose(); }
+        if (disposing) { _clicks.ReleaseLocalEdge(); _dragWorker?.Dispose(); _overlay?.Dispose(); _toggle.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -6,7 +6,7 @@ namespace HoverPulse.Core;
 internal enum ClickType { LeftClick, RightClick, DoubleClick, DragStart, DragEnd }
 
 internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wait,
-    Func<uint, bool, bool>? dragEdge = null)
+    Func<uint, bool, ValueTask<bool>>? dragEdge = null)
 {
     private bool _busy;
     private uint _ownedUp;
@@ -25,7 +25,7 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
         return NativeMethods.SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
     }
 
-    public bool Dispatch(ClickType action, bool alternate)
+    public async ValueTask<bool> DispatchAsync(ClickType action, bool alternate)
     {
         if (_busy || (Holding && action != ClickType.DragEnd) || (!Holding && action == ClickType.DragEnd))
         {
@@ -37,7 +37,7 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
         {
             if (action == ClickType.DragEnd)
             {
-                return Release();
+                return await ReleaseAsync();
             }
 
             uint down = action == ClickType.RightClick ? NativeMethods.MOUSEEVENTF_RIGHTDOWN : NativeMethods.MOUSEEVENTF_LEFTDOWN;
@@ -45,8 +45,8 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
             for (int i = 0; i < pairs; i++)
             {
                 bool isDrag = action == ClickType.DragStart;
-                var sendDown = isDrag ? dragEdge ?? emit : emit;
-                if (!sendDown(down, alternate))
+                bool sent = isDrag && dragEdge != null ? await dragEdge(down, alternate) : emit(down, alternate);
+                if (!sent)
                 {
                     return false;
                 }
@@ -60,7 +60,7 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
                 }
 
                 wait(alternate ? 100 : 0);
-                if (!Release())
+                if (!ReleaseLocalEdge())
                 {
                     return false;
                 }
@@ -75,15 +75,25 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
         finally { _busy = false; }
     }
 
-    public bool Release()
+    public async ValueTask<bool> ReleaseAsync()
     {
-        if (!Holding)
+        if (!_ownedDrag || dragEdge == null)
         {
-            return true;
+            return ReleaseLocalEdge();
         }
 
-        var sendUp = _ownedDrag ? dragEdge ?? emit : emit;
-        if (!sendUp(_ownedUp, _ownedBackend))
+        if (Holding && !await dragEdge(_ownedUp, _ownedBackend))
+        {
+            return false;
+        }
+
+        _ownedUp = 0;
+        return true;
+    }
+
+    internal bool ReleaseLocalEdge()
+    {
+        if (Holding && ((_ownedDrag && dragEdge != null) || !emit(_ownedUp, _ownedBackend)))
         {
             return false;
         }

@@ -16,6 +16,87 @@ public class ToolbarIntegrationTests
     [Fact]
     public void PointerOnlySessionOnPrivateDesktop() => OnPrivateDesktop(RunSession);
 
+    [Theory, InlineData(false), InlineData(true)]
+    public void DropAfterResumeKeepsTheToolbarResponsiveWhileWorkerReplies(bool alternate) => OnPrivateDesktop(() =>
+    {
+        using var receiver = new Form { StartPosition = FormStartPosition.Manual, Bounds = new(35,260,240,160) };
+        receiver.Show();
+        var folder = Directory.CreateTempSubdirectory("hoverclick-drop-");
+        try
+        {
+            var reply = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            List<uint> drag = [];
+            List<uint> ordinary = [];
+            var clicks = new ClickSimulator((flag, _) => { ordinary.Add(flag); return true; }, _ => {}, (flag, backend) =>
+            {
+                Assert.Equal(alternate, backend);
+                drag.Add(flag);
+                return flag == NativeMethods.MOUSEEVENTF_LEFTDOWN ? ValueTask.FromResult(true) : new(reply.Task);
+            });
+            CursorSample? cursor = null;
+            using var form = new ToolbarWindow(new SettingsService(Path.Combine(folder.FullName,"settings.json")),
+                new AppSettings { ToolbarX=0, ToolbarY=0, AlternateInput=alternate }, clicks, () => cursor);
+
+            void Dwell(Point point)
+            {
+                POINT p = new(point.X, point.Y);
+                cursor = new(p,p);
+                for (int tick = 0; tick < 8; tick++) { form.Tick(); }
+            }
+
+            void Select(string label, int offset = 0)
+            {
+                var button = form.Controls.OfType<Button>().Single(b => b.Text == label);
+                Dwell(button.PointToScreen(new Point(button.Width / 2 + offset, button.Height / 2)));
+            }
+
+            Exception? failure = null;
+            using var deadline = new System.Windows.Forms.Timer { Interval = 2000 };
+            deadline.Tick += (_, _) =>
+            {
+                failure = new TimeoutException("The toolbar did not finish the acknowledged drop and close.");
+                form.Dispose();
+            };
+            form.Shown += (_, _) => form.BeginInvoke(() =>
+            {
+                try
+                {
+                    var target = receiver.PointToScreen(new Point(40,50));
+                    Select("Drag");
+                    Dwell(target);
+                    Select("Pause");
+                    Dwell(target);
+                    Assert.Equal(new uint[] { 2 }, drag);
+                    Select("Resume", 4);
+                    Dwell(target);
+                    Assert.Equal(new uint[] { 2, 4 }, drag);
+                    Assert.True(clicks.Holding);
+
+                    bool queriedWhileHeld = false;
+                    form.BeginInvoke(() => queriedWhileHeld = clicks.Holding && form.Controls.OfType<Button>().Any(b => b.Text == "Pause"));
+                    Application.DoEvents();
+                    Assert.True(queriedWhileHeld);
+                    form.Close();
+                    Assert.True(form.Visible);
+                    reply.SetResult(true);
+                    deadline.Start();
+                }
+                catch (Exception error)
+                {
+                    failure = error;
+                    form.Dispose();
+                }
+            });
+            Application.Run(form);
+            if (failure != null) { ExceptionDispatchInfo.Throw(failure); }
+            Assert.False(form.Visible);
+            Assert.False(clicks.Holding);
+            Assert.Empty(ordinary);
+            Assert.Equal(new uint[] { 2, 4 }, drag);
+        }
+        finally { folder.Delete(true); }
+    });
+
     [Fact]
     public void ScreenPositionFindsTargetAndReferencePositionRearmsDwell() => OnPrivateDesktop(() =>
     {

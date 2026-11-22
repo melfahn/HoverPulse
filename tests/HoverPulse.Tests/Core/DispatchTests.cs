@@ -4,27 +4,39 @@ namespace HoverPulse.Tests.Core;
 
 public class DispatchTests
 {
+    [Theory, InlineData(false), InlineData(true)]
+    public void WorkerAcknowledgesReleaseOnlyAfterTheButtonClears(bool clears)
+    {
+        using var commands = new MemoryStream([1, 3]);
+        using var replies = new MemoryStream();
+        List<uint> edges = [];
+        Assert.Equal(0, DragWorker.Run(commands, replies, (flag, _) => { edges.Add(flag); return true; },
+            () => !clears));
+        Assert.Equal(new byte[] { 1, clears ? (byte)1 : (byte)0 }, replies.ToArray());
+        Assert.Equal(clears ? new uint[] { 2, 4 } : [2, 4, 4], edges);
+    }
+
     [Fact]
-    public void DragReleaseUsesItsOriginalOwnerAndBackend()
+    public async Task DragReleaseUsesItsOriginalOwnerAndBackend()
     {
         List<(uint Flag, bool Alternate)> ordinary = [], drag = [];
         bool allowUp = false;
         var clicks = new ClickSimulator((flag, alt) => { ordinary.Add((flag, alt)); return true; },
-            _ => { }, (flag, alt) => { drag.Add((flag, alt)); return flag != 4 || allowUp; });
+            _ => { }, (flag, alt) => { drag.Add((flag, alt)); return ValueTask.FromResult(flag != 4 || allowUp); });
 
-        Assert.True(clicks.Dispatch(ClickType.LeftClick, false));
-        Assert.True(clicks.Dispatch(ClickType.DragStart, true));
-        Assert.False(clicks.Dispatch(ClickType.DragEnd, false));
+        Assert.True(await clicks.DispatchAsync(ClickType.LeftClick, false));
+        Assert.True(await clicks.DispatchAsync(ClickType.DragStart, true));
+        Assert.False(await clicks.DispatchAsync(ClickType.DragEnd, false));
         Assert.True(clicks.Holding);
         allowUp = true;
-        Assert.True(clicks.Release());
+        Assert.True(await clicks.ReleaseAsync());
         Assert.False(clicks.Holding);
         Assert.Equal(new (uint, bool)[] { (2, false), (4, false) }, ordinary);
         Assert.Equal(new (uint, bool)[] { (2, true), (4, true), (4, true) }, drag);
     }
 
     [Theory, InlineData(false), InlineData(true)]
-    public void BothBackendsPreserveEdgeOrderAndSpacing(bool alternate)
+    public async Task BothBackendsPreserveEdgeOrderAndSpacing(bool alternate)
     {
         List<(uint, int)> events = [];
         int time = 0;
@@ -34,64 +46,67 @@ public class DispatchTests
             events.Add((edge, time));
             return true;
         }, delta => time += delta);
-        Assert.True(sender.Dispatch(ClickType.DoubleClick, alternate));
+        Assert.True(await sender.DispatchAsync(ClickType.DoubleClick, alternate));
         int step = alternate ? 100 : 0;
         Assert.Equal(new (uint, int)[] { (2,0),(4,step),(2,2*step),(4,3*step) }, events);
-        Assert.True(sender.Dispatch(ClickType.RightClick, alternate));
+        Assert.True(await sender.DispatchAsync(ClickType.RightClick, alternate));
         Assert.Equal(new uint[] {8,16}, events.TakeLast(2).Select(e => e.Item1));
     }
 
     [Fact]
-    public void ShortWriteKeepsOnlyOutstandingReleaseAndSuppressesReentry()
+    public async Task ShortWriteKeepsOnlyOutstandingReleaseAndSuppressesReentry()
     {
         List<uint> edges = [];
         bool failUp = true;
+        ValueTask<bool> reentry = default;
         ClickSimulator? sender = null;
         sender = new ClickSimulator((edge, _) =>
         {
             edges.Add(edge);
             return edge != 4 || !failUp;
-        }, _ => Assert.False(sender!.Dispatch(ClickType.RightClick, true)));
-        Assert.False(sender.Dispatch(ClickType.DoubleClick, true));
+        }, _ => reentry = sender!.DispatchAsync(ClickType.RightClick, true));
+        Assert.False(await sender.DispatchAsync(ClickType.DoubleClick, true));
+        Assert.True(reentry.IsCompletedSuccessfully);
+        Assert.False(await reentry);
         Assert.True(sender.Holding);
-        Assert.False(sender.Dispatch(ClickType.LeftClick, true));
+        Assert.False(await sender.DispatchAsync(ClickType.LeftClick, true));
         failUp = false;
-        Assert.True(sender.Release());
-        Assert.True(sender.Release());
+        Assert.True(await sender.ReleaseAsync());
+        Assert.True(await sender.ReleaseAsync());
         Assert.Equal(new uint[] {2,4,4}, edges);
-        Assert.False(new ClickSimulator((_,_) => false, _ => {}).Dispatch(ClickType.LeftClick, true));
+        Assert.False(await new ClickSimulator((_,_) => false, _ => {}).DispatchAsync(ClickType.LeftClick, true));
     }
 
     [Fact]
-    public void LockedAndOneUseDragSurvivePause()
+    public async Task LockedAndOneUseDragSurvivePause()
     {
         var state = new ActionSelection();
         var detector = new DwellDetector();
         List<uint> edges = [];
         var sender = new ClickSimulator((edge, _) => { edges.Add(edge); return true; }, _ => {});
-        void Fire()
+        async Task Fire()
         {
             var action = state.Next;
-            Assert.True(sender.Dispatch(action, false));
+            Assert.True(await sender.DispatchAsync(action, false));
             state.Completed(action);
         }
 
         state.Select(ClickType.RightClick);
         state.Select(ClickType.RightClick);
         state.Select(ClickType.DragStart);
-        Fire();
+        await Fire();
         detector.SetPaused(true);
         Assert.False(detector.Sample(default, false));
         Assert.True(sender.Holding);
         detector.SetPaused(false);
-        Fire();
+        await Fire();
         Assert.Equal(ClickType.RightClick, state.Next);
         state.Select(ClickType.DragStart);
         state.Select(ClickType.DragStart);
-        Fire();
-        Fire();
-        Fire();
-        Fire();
+        await Fire();
+        await Fire();
+        await Fire();
+        await Fire();
         Assert.Equal(ClickType.DragStart, state.Next);
         Assert.Equal(new uint[] {2,4,2,4,2,4}, edges);
     }

@@ -11,7 +11,9 @@ internal sealed class DragWorker : IDisposable
 {
     internal const string Argument = "--drag-worker";
     private const byte LegacyDown = 1, AlternateDown = 2, Up = 3;
+    private readonly object _connection = new();
     private Process? _process;
+    private bool _retiring, _disposed;
 
     internal bool Prepare()
     {
@@ -20,7 +22,7 @@ internal sealed class DragWorker : IDisposable
             return true;
         }
 
-        Dispose();
+        DisposeProcess();
         if (Environment.ProcessPath is not string path)
         {
             return false;
@@ -42,7 +44,12 @@ internal sealed class DragWorker : IDisposable
         return _process != null;
     }
 
-    internal bool Send(uint flag, bool alternate)
+    internal ValueTask<bool> SendAsync(uint flag, bool alternate) => new(Task.Run(() =>
+    {
+        lock (_connection) { return !_disposed && Send(flag, alternate); }
+    }));
+
+    private bool Send(uint flag, bool alternate)
     {
         bool up = flag == NativeMethods.MOUSEEVENTF_LEFTUP;
         if (!up && flag != NativeMethods.MOUSEEVENTF_LEFTDOWN)
@@ -50,6 +57,10 @@ internal sealed class DragWorker : IDisposable
             return false;
         }
 
+        if (_retiring && !FinishRetirement())
+        {
+            return false;
+        }
         if (up && (_process == null || _process.HasExited))
         {
             // The toolbar only requests up after an acknowledged down.
@@ -80,17 +91,41 @@ internal sealed class DragWorker : IDisposable
         }
         catch (IOException) { DragTrace.Write("command-io-error"); }
         catch (TimeoutException) { DragTrace.Write("reply-timeout"); }
-        Dispose(); // EOF requests release if the worker accepted down before losing its acknowledgment.
-        return false;
+        // EOF lets the worker clean up uncertain ownership. Wait for it to finish
+        // before a fallback can race a release from the old worker.
+        CloseCommands();
+        return FinishRetirement() && up && ReleaseIfHeld(alternate);
     }
 
-    private static bool ReleaseIfHeld(bool alternate) =>
-        (NativeMethods.GetAsyncKeyState(1) & 0x8000) == 0 ||
-        ClickSimulator.NativeEdge(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
+    private static bool LeftDown() => NativeMethods.GetAsyncKeyState(1) < 0;
 
-    internal static int Run(Stream commands, Stream replies)
+    private static bool ReleaseIfHeld(bool alternate) => !LeftDown() ||
+        (Emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate) && WaitForUp(LeftDown));
+
+    internal static int Run(Stream commands, Stream replies, Func<uint, bool, bool>? emit = null,
+        Func<bool>? leftDown = null)
     {
-        bool held = false, alternate = false;
+        emit ??= Emit;
+        leftDown ??= LeftDown;
+        bool held = false, alternate = false, releaseSent = false;
+
+        bool Release()
+        {
+            if (!held) { return true; }
+            if (!releaseSent || leftDown())
+            {
+                releaseSent = emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
+                if (!releaseSent || !WaitForUp(leftDown))
+                {
+                    DragTrace.Write("release-unconfirmed");
+                    return false;
+                }
+            }
+            held = false;
+            releaseSent = false;
+            return true;
+        }
+
         try
         {
             DragTrace.Write("worker-ready");
@@ -101,16 +136,12 @@ internal sealed class DragWorker : IDisposable
                 bool accepted;
                 if (command == Up)
                 {
-                    accepted = !held || Emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
-                    if (accepted)
-                    {
-                        held = false;
-                    }
+                    accepted = Release();
                 }
                 else if (!held && command is LegacyDown or AlternateDown)
                 {
                     alternate = command == AlternateDown;
-                    held = Emit(NativeMethods.MOUSEEVENTF_LEFTDOWN, alternate);
+                    held = emit(NativeMethods.MOUSEEVENTF_LEFTDOWN, alternate);
                     accepted = held;
                 }
                 else { return 2; }
@@ -126,11 +157,13 @@ internal sealed class DragWorker : IDisposable
             if (held)
             {
                 DragTrace.Write("worker-cleanup-release");
-                Emit(NativeMethods.MOUSEEVENTF_LEFTUP, alternate);
+                Release();
             }
         }
         return 0;
     }
+
+    private static bool WaitForUp(Func<bool> leftDown) => SpinWait.SpinUntil(() => !leftDown(), 50);
 
     private static bool Emit(uint flag, bool alternate)
     {
@@ -138,25 +171,50 @@ internal sealed class DragWorker : IDisposable
         bool accepted = ClickSimulator.NativeEdge(flag, alternate);
         if (DragTrace.Enabled)
         {
-            bool leftDown = (NativeMethods.GetAsyncKeyState(1) & 0x8000) != 0;
-            DragTrace.Write($"native-return flag={flag} accepted={accepted} leftDown={leftDown}");
+            DragTrace.Write($"native-return flag={flag} accepted={accepted} leftDown={LeftDown()}");
         }
         return accepted;
     }
 
-    public void Dispose()
+    private bool FinishRetirement()
     {
-        if (_process == null)
+        if (!_process!.WaitForExit(500))
         {
-            return;
+            DragTrace.Write("worker-retirement-pending");
+            return false;
         }
+        DragTrace.Write("worker-retired");
+        DisposeProcess();
+        return true;
+    }
 
+    private void CloseCommands()
+    {
+        if (_process == null || _retiring) { return; }
+        _retiring = true;
         try { _process.StandardInput.Close(); }
         catch (IOException) { /* The worker already closed its end of the pipe. */ }
+    }
+
+    private void DisposeProcess()
+    {
+        if (_process == null) { return; }
+        CloseCommands();
+        try { _process.StandardOutput.Dispose(); }
         finally
         {
             _process.Dispose();
             _process = null;
+            _retiring = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_connection)
+        {
+            _disposed = true;
+            DisposeProcess();
         }
     }
 }

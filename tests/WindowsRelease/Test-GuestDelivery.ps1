@@ -67,6 +67,7 @@ $exe = Get-Item -LiteralPath $Executable
 $hash = (Get-FileHash -LiteralPath $exe.FullName).Hash
 if ($ExpectedSHA256 -and $hash -ne $ExpectedSHA256) { throw 'The staged executable differs from the expected build.' }
 $isReference = $Product -eq 'Reference'
+if (!$isReference -and $SoakHours -gt 0 -and !$ExpectedSHA256) { throw 'Candidate endurance requires the exact executable hash.' }
 if ($DropDeadlineMilliseconds -ne 1200 -and ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $isReference -or !$SoakHours)) {
     throw 'An intentionally short drop deadline requires a disposable hosted candidate soak.'
 }
@@ -176,6 +177,7 @@ function Save-CycleFailure($Failure) {
 function Observe-LateEdges {
     # Hold the destination and pump the receiver before any recovery action.
     $first = $receiver.Edges.Count
+    $firstEvent = $receiver.DragTimeline.Count
     $late = [Diagnostics.Stopwatch]::StartNew()
     $samples = do {
         [pscustomobject]@{Qpc=[Diagnostics.Stopwatch]::GetTimestamp(); LeftDown=[ReleaseReceiver]::LeftDown();
@@ -185,6 +187,8 @@ function Observe-LateEdges {
     @{Samples=@($samples); Edges=@($receiver.Edges.GetRange($first,$receiver.Edges.Count-$first).ToArray());
       LeftDown=[ReleaseReceiver]::LeftDown(); ObservationMilliseconds=$late.ElapsedMilliseconds} |
         ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $run.FailureDir 'late-observation.json')
+    $receiver.DragTimeline.GetRange($firstEvent,$receiver.DragTimeline.Count-$firstEvent).ToArray() |
+        Set-Content -LiteralPath (Join-Path $run.FailureDir 'receiver-late.log')
 }
 function Recover-TestCycle {
     $recovery = [ordered]@{StartedUtc=[datetime]::UtcNow.ToString('o'); OldPid=$run.App.Id; NewPid=$null; Safe=$false}
