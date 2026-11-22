@@ -1,3 +1,4 @@
+using HoverPulse.Core;
 using HoverPulse.Services;
 using HoverPulse.UI;
 
@@ -6,8 +7,19 @@ namespace HoverPulse;
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args is [DragWorker.Argument])
+        {
+            if (!Console.IsInputRedirected || !Console.IsOutputRedirected)
+            {
+                return 2;
+            }
+
+            using var commands = Console.OpenStandardInput();
+            using var replies = Console.OpenStandardOutput();
+            return DragWorker.Run(commands, replies);
+        }
         using var mutex = new Mutex(true, @"Local\HoverPulse_SingleInstance", out var first);
         if (!first)
         {

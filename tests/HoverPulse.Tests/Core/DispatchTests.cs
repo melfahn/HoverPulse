@@ -4,6 +4,25 @@ namespace HoverPulse.Tests.Core;
 
 public class DispatchTests
 {
+    [Fact]
+    public void DragReleaseUsesItsOriginalOwnerAndBackend()
+    {
+        List<(uint Flag, bool Alternate)> ordinary = [], drag = [];
+        bool allowUp = false;
+        var clicks = new ClickSimulator((flag, alt) => { ordinary.Add((flag, alt)); return true; },
+            _ => { }, (flag, alt) => { drag.Add((flag, alt)); return flag != 4 || allowUp; });
+
+        Assert.True(clicks.Dispatch(ClickType.LeftClick, false));
+        Assert.True(clicks.Dispatch(ClickType.DragStart, true));
+        Assert.False(clicks.Dispatch(ClickType.DragEnd, false));
+        Assert.True(clicks.Holding);
+        allowUp = true;
+        Assert.True(clicks.Release());
+        Assert.False(clicks.Holding);
+        Assert.Equal(new (uint, bool)[] { (2, false), (4, false) }, ordinary);
+        Assert.Equal(new (uint, bool)[] { (2, true), (4, true), (4, true) }, drag);
+    }
+
     [Theory, InlineData(false), InlineData(true)]
     public void BothBackendsPreserveEdgeOrderAndSpacing(bool alternate)
     {

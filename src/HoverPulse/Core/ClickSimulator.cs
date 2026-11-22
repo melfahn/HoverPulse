@@ -5,11 +5,13 @@ namespace HoverPulse.Core;
 
 internal enum ClickType { LeftClick, RightClick, DoubleClick, DragStart, DragEnd }
 
-internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wait)
+internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wait,
+    Func<uint, bool, bool>? dragEdge = null)
 {
     private bool _busy;
     private uint _ownedUp;
     private bool _ownedBackend;
+    private bool _ownedDrag;
     public bool Holding => _ownedUp != 0;
 
     public static bool NativeEdge(uint flag, bool alternate)
@@ -42,13 +44,16 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
             int pairs = action == ClickType.DoubleClick ? 2 : 1;
             for (int i = 0; i < pairs; i++)
             {
-                if (!emit(down, alternate))
+                bool isDrag = action == ClickType.DragStart;
+                var sendDown = isDrag ? dragEdge ?? emit : emit;
+                if (!sendDown(down, alternate))
                 {
                     return false;
                 }
 
                 _ownedUp = down << 1;
                 _ownedBackend = alternate;
+                _ownedDrag = isDrag;
                 if (action == ClickType.DragStart)
                 {
                     return true;
@@ -77,7 +82,8 @@ internal sealed class ClickSimulator(Func<uint, bool, bool> emit, Action<int> wa
             return true;
         }
 
-        if (!emit(_ownedUp, _ownedBackend))
+        var sendUp = _ownedDrag ? dragEdge ?? emit : emit;
+        if (!sendUp(_ownedUp, _ownedBackend))
         {
             return false;
         }

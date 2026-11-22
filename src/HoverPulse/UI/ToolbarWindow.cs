@@ -16,6 +16,7 @@ internal sealed class ToolbarWindow : Form
     private readonly DwellDetector _detector = new();
     private readonly ActionSelection _selection = new();
     private readonly ClickSimulator _clicks;
+    private readonly DragWorker? _dragWorker;
     private readonly Func<POINT?> _cursor;
     private readonly FlowLayoutPanel _panel = new() { AutoSize = true, WrapContents = false };
     private readonly Button _toggle = MakeButton("Pause");
@@ -32,7 +33,12 @@ internal sealed class ToolbarWindow : Form
     public ToolbarWindow(SettingsService store, AppSettings settings, ClickSimulator? clicks = null, Func<POINT?>? cursor = null)
     {
         _store = store;
-        _clicks = clicks ?? new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges);
+        if (clicks == null)
+        {
+            _dragWorker = new DragWorker();
+            clicks = new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges, _dragWorker.Send);
+        }
+        _clicks = clicks;
         _cursor = cursor ?? (() => NativeMethods.GetCursorPos(out var point) ? point : null);
         _settings = settings;
         _selection.Restore(settings.DefaultAction);
@@ -219,6 +225,7 @@ internal sealed class ToolbarWindow : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        _dragWorker?.Prepare();
         _toggle.Click += (_, _) => ActivateButton(_toggle);
         if (NativeMethods.SetTimer(Handle, 1, 100, 0) == 0)
         {
@@ -440,7 +447,7 @@ internal sealed class ToolbarWindow : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _clicks.Release(); _overlay?.Dispose(); _toggle.Dispose(); }
+        if (disposing) { _clicks.Release(); _dragWorker?.Dispose(); _overlay?.Dispose(); _toggle.Dispose(); }
         base.Dispose(disposing);
     }
 }

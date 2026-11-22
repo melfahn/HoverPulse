@@ -46,6 +46,9 @@ internal static partial class NativeMethods
     internal static partial bool GetCursorPos(out POINT lpPoint);
 
     [LibraryImport("user32.dll")]
+    internal static partial short GetAsyncKeyState(int key);
+
+    [LibraryImport("user32.dll")]
     internal static partial void mouse_event(uint flags, uint dx, uint dy, uint data, nuint extra);
 
     [LibraryImport("user32.dll")]

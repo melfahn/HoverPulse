@@ -4,7 +4,7 @@
 
 | Evidence | Result |
 |---|---|
-| Release test suite | 16 passed, zero failed or skipped. Receipt in `artifacts/verification/isolated.trx`. |
+| Release test suite | 17 passed, zero failed or skipped after adding the drag ownership regression. The baseline candidate passed 16 tests. |
 | Detector | All five specification traces, minimum and maximum settings, stationary suppression, axis boundaries and large coordinate deltas passed. 288,000 simulated 100 ms deliveries produced the expected 5,760 clicks. |
 | Action delivery | Recording backend verified both dispatch paths, ordering, pacing requests, short-write recovery, reentry suppression and drag ownership. |
 | Windows UI | A separate thread attached to a newly created, undisplayed Windows desktop. Real controls and synthetic samples exercised toolbar selection, pause during drag, hands-free resume and drop, options cancel/apply, moving the toolbar and confirmed quit. A companion test window verified registration, acknowledgment and quit notification. Synthetic session messages exercised lock, unlock, resume and display-change handling. |
@@ -16,7 +16,7 @@ The normalized tick trace uses an explicit first sample as its baseline. Runtime
 
 ## Process lifetime checks
 
-A duplicate candidate exited with status 1 and the original continued on both backends. Orderly exit during a drag delivered exactly one left-up and cleared the Windows left-button state. Forced termination of the original candidate and of the reference during a legacy drag left the button held. The test receiver measured that state before cleaning it up. Use `-CheckOrderlyExit` on the candidate or `-CheckForcedExit` on either product to reproduce these checks in a reserved test login.
+A duplicate candidate exited with status 1 and the original continued on both backends. Orderly exit during a drag delivered exactly one left-up and cleared the Windows left-button state. Forced termination of the original candidate and of the reference during a legacy drag left the button held. The test receiver measured that state before cleaning it up. HoverPulse now routes only the held drag through a separate process that owns the down and up events. When the toolbar process dies, Windows closes its pipe and the drag process releases the button. The repaired candidate passed actual forced toolbar termination on both native backends. Simultaneous termination of both processes, desktop loss and restricted input targets require separate qualification. Use `-CheckOrderlyExit` on the candidate or `-CheckForcedExit` on either product to reproduce these checks in a reserved test login.
 
 ## Guest procedure
 
