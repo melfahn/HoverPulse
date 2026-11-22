@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 using System.Windows.Forms;
 
@@ -212,9 +213,36 @@ public sealed class ReleaseReceiver : Form
 
     public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
 
+    public static string IntegritySid(Process process)
+    {
+        Microsoft.Win32.SafeHandles.SafeFileHandle token;
+        if (!OpenProcessToken(process.Handle,8,out token)) throw new System.ComponentModel.Win32Exception();
+        using (token) {
+            int bytes;
+            GetTokenInformation(token,25,IntPtr.Zero,0,out bytes);
+            if (bytes <= 0) throw new System.ComponentModel.Win32Exception();
+            IntPtr data = Marshal.AllocHGlobal(bytes);
+            try {
+                if (!GetTokenInformation(token,25,data,bytes,out bytes)) throw new System.ComponentModel.Win32Exception();
+                return new SecurityIdentifier(Marshal.ReadIntPtr(data)).Value;
+            } finally { Marshal.FreeHGlobal(data); }
+        }
+    }
+
+    public static void Foreground(IntPtr window)
+    {
+        if (GetForegroundWindow() != window) SetForegroundWindow(window);
+        Pump(200);
+        if (GetForegroundWindow() != window) throw new InvalidOperationException("Test receiver is not the foreground window.");
+    }
+
     [DllImport("wtsapi32.dll")] public static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);
     [DllImport("wtsapi32.dll")] public static extern bool WTSUnRegisterSessionNotification(IntPtr window);
     [DllImport("user32.dll")] public static extern bool LockWorkStation();
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out Microsoft.Win32.SafeHandles.SafeFileHandle token);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(Microsoft.Win32.SafeHandles.SafeFileHandle token,int info,IntPtr buffer,int length,out int needed);
 
     public void ReleaseTestDrag()
     {

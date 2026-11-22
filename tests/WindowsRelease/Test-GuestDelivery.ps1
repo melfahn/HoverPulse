@@ -19,6 +19,7 @@ param(
     [switch]$CheckDesign,
     [string]$RestoreDesignProfile,
     [switch]$CheckMixedDpi,
+    [string]$RestrictedPeer,
     [ValidateRange(0,768)][int]$ExpectedDpi = 0,
     [ValidateRange(1200,60000)][int]$DragHoldMilliseconds = 1200,
     [ValidateRange(0,48)][double]$SoakHours = 0
@@ -66,6 +67,7 @@ $isReference = $Product -eq 'Reference'
 if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
+if ($RestrictedPeer -and ($isReference -or $SoakHours -or $CheckDesign -or $CheckReconnect -or $CheckMixedDpi -or $CheckForcedExit -or $CheckOrderlyExit -or $CheckBoundaries -or $MeasureMotion -or $RestoreDesignProfile)) { throw 'The input-integrity check requires a separate candidate run.' }
 if ($RestoreDesignProfile -and ($isReference -or $CheckDesign -or $CheckMixedDpi)) { throw 'Restore a saved design in a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($CheckLock -and !$CheckReconnect) { throw 'Lock testing requires an authenticated reconnect coordinator.' }
@@ -96,7 +98,7 @@ if ($isReference) {
             ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
     }
 }
-# Boundary offsets and logged target coordinates are physical pixels in every suite.
+# Screen placement uses physical pixels. Boundary checks request and verify reference-space offsets.
 $previousDpi = [ReleaseReceiver]::EnterPerMonitorDpi()
 $receiver = New-Object ReleaseReceiver
 if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
@@ -122,6 +124,11 @@ try {
         [ReleaseReceiver]::Pump(100)
         $window = if ($isReference) { $app.MainWindowHandle } else { [ReleaseReceiver]::CandidateToolbar($app.Id) }
     } until ($window -ne 0)
+    if ($RestrictedPeer) {
+        & (Join-Path $PSScriptRoot Test-InputBoundary.ps1) -Receiver $receiver -App $app -Window $window -PeerExecutable $RestrictedPeer -OutputDirectory $out -Alternate:$Alternate
+        $passed=$true
+        return
+    }
     if ($RestoreDesignProfile) {
         & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -Restored
     }
@@ -337,7 +344,7 @@ finally {
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent; CheckedLock=$CheckLock.IsPresent; SessionEvents=@($receiver.SessionEvents);
        CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent;
-       CheckedMonitorRemoval=$CheckMonitorRemoval.IsPresent; CheckedRestoredProfile=[bool]$RestoreDesignProfile } |
+       CheckedMonitorRemoval=$CheckMonitorRemoval.IsPresent; CheckedRestoredProfile=[bool]$RestoreDesignProfile; CheckedInputBoundary=[bool]$RestrictedPeer } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     if ($registered) { [void][ReleaseReceiver]::WTSUnRegisterSessionNotification($receiver.Handle) }
     $receiver.Dispose()
