@@ -55,7 +55,14 @@ public sealed class ReleaseReceiver : Form
 
     public void HoldScreenPoint(IntPtr handle, int x, int y, int milliseconds)
     {
-        if (WindowFromPoint(new Point(x,y)) != handle) throw new Exception("Target is occluded");
+        var actual = WindowFromPoint(new Point(x,y));
+        if (actual != handle)
+        {
+            uint owner;
+            GetWindowThreadProcessId(actual, out owner);
+            throw new InvalidOperationException(String.Format(
+                "Target at {0},{1} is occluded. Expected HWND {2}, found {3} (PID {4}).", x, y, handle, actual, owner));
+        }
         Trace.Add(String.Format("{0:F3} sample-target {1} {2} {3}", clock.Elapsed.TotalMilliseconds,handle,x,y));
         double start = clock.Elapsed.TotalMilliseconds;
         if (!SetCursorPos(x,y)) throw new Exception("Failed to position test pointer");

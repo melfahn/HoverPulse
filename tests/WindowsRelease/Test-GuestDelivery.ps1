@@ -114,8 +114,12 @@ $registered = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($true) }
+    $receiver.TopMost = $true
     $receiver.Show()
+    $receiver.Activate()
+    [ReleaseReceiver]::Pump(250)
     $receiver.Hold($receiver.Handle,-48,100)
+    $receiver.TopMost = $false
     if ($RestrictedPeer) {
         $lowTemp = Join-Path $env:USERPROFILE ('AppData\LocalLow\HoverClick-QA\' + [Guid]::NewGuid().ToString('N'))
         $null = New-Item -ItemType Directory -Path $lowTemp -Force
