@@ -12,6 +12,7 @@ param(
     [switch]$CheckOrderlyExit,
     [switch]$CheckForcedExit,
     [switch]$CheckReconnect,
+    [switch]$CheckLock,
     [switch]$CheckBoundaries,
     [switch]$CheckDesign,
     [switch]$CheckMixedDpi,
@@ -63,6 +64,7 @@ if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit co
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
+if ($CheckLock -and !$CheckReconnect) { throw 'Lock testing requires an authenticated reconnect coordinator.' }
 if ($isReference -and $hash -ne 'CB8D235299FFAB67C950DC6D96B00CBD269C0691B43CADE368C7735F5B95CA15') {
     throw 'Reference hash mismatch.'
 }
@@ -95,6 +97,7 @@ $app = $null
 $passed = $false
 $heldAfterKill = $null
 $cycles = 0
+$registered = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($true) }
@@ -188,6 +191,15 @@ try {
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'paused before RDP disconnect' ''
+        if ($CheckLock) {
+            $registered = [ReleaseReceiver]::WTSRegisterSessionNotification($receiver.Handle,0)
+            if (!$registered -or ![ReleaseReceiver]::LockWorkStation()) { throw 'Could not lock the test login.' }
+            $lockWait = [Diagnostics.Stopwatch]::StartNew()
+            while (!$receiver.SessionEvents.Contains(7)) {
+                if ($lockWait.Elapsed.TotalSeconds -ge 15) { throw 'Windows did not confirm session lock.' }
+                [ReleaseReceiver]::Pump(50)
+            }
+        }
         @{ProcessId=$app.Id; SessionId=$session; Width=[Windows.Forms.Screen]::PrimaryScreen.Bounds.Width} |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'ready-for-reconnect.json')
         $reconnect = [Diagnostics.Stopwatch]::StartNew()
@@ -197,6 +209,7 @@ try {
         }
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'paused across reconnect' ''
+        if ($CheckLock -and !$receiver.SessionEvents.Contains(8)) { throw 'Windows did not confirm session unlock.' }
         Select-Mode 'Resume' 1000 4
         $receiver.Hold($receiver.Handle,30,1200)
         Check-Edges 'first dwell after RDP reconnect' 'LD,LU'
@@ -262,9 +275,10 @@ finally {
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
-       LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent;
+       LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent; CheckedLock=$CheckLock.IsPresent; SessionEvents=@($receiver.SessionEvents);
        CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
+    if ($registered) { [void][ReleaseReceiver]::WTSUnRegisterSessionNotification($receiver.Handle) }
     $receiver.Dispose()
     if ($previousDpi) { [ReleaseReceiver]::RestoreDpi($previousDpi) }
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($false) }

@@ -10,6 +10,7 @@ public sealed class ReleaseReceiver : Form
 {
     public readonly List<string> Edges = new List<string>();
     public readonly List<string> Trace = new List<string>();
+    public readonly List<int> SessionEvents = new List<int>();
     readonly Stopwatch clock = Stopwatch.StartNew();
     public ReleaseReceiver()
     {
@@ -19,6 +20,7 @@ public sealed class ReleaseReceiver : Form
     }
     protected override void WndProc(ref Message msg)
     {
+        if (msg.Msg == 0x2b1) SessionEvents.Add(msg.WParam.ToInt32());
         string edge = null;
         switch (msg.Msg)
         {
@@ -168,6 +170,10 @@ public sealed class ReleaseReceiver : Form
     }
 
     public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
+
+    [DllImport("wtsapi32.dll")] public static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);
+    [DllImport("wtsapi32.dll")] public static extern bool WTSUnRegisterSessionNotification(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool LockWorkStation();
 
     public void ReleaseTestDrag()
     {
