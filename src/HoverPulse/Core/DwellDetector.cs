@@ -27,7 +27,12 @@ internal sealed class DwellDetector
 
     // Called once per delivered timer message. Off-button samples during pause
     // leave even the previous coordinates untouched.
-    public bool Sample(POINT point, bool overToggle)
+    public void CancelPending()
+    {
+        if (_count > 0) { _count = 0; }
+    }
+
+    public bool Sample(POINT point, bool overToggle, bool eligible = true)
     {
         if (Paused && !overToggle)
         {
@@ -54,7 +59,7 @@ internal sealed class DwellDetector
                 _count = 0;
             }
         }
-        _count = step < MoveLimit ? _count + 1 : 0;
+        _count = eligible && step < MoveLimit ? _count + 1 : 0;
         if (_count <= ClickTime)
         {
             return false;

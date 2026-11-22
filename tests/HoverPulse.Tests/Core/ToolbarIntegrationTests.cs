@@ -14,7 +14,9 @@ public class ToolbarIntegrationTests
     // CreateDesktop does not display or switch desktops. This private desktop uses a fake
     // cursor and a recording sink for its entire lifetime, including cleanup.
     [Fact]
-    public void PointerOnlySessionOnPrivateDesktop()
+    public void PointerOnlySessionOnPrivateDesktop() => OnPrivateDesktop(RunSession);
+
+    internal static void OnPrivateDesktop(Action run)
     {
         string desktopName = "HoverPulseTests" + Guid.NewGuid().ToString("N");
         IntPtr desktop = CreateDesktopW(desktopName, null, 0, 0, 0x1ff, 0);
@@ -25,7 +27,7 @@ public class ToolbarIntegrationTests
             try
             {
                 if (!SetThreadDesktop(desktop)) { throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); }
-                RunSession();
+                run();
             }
             catch (Exception error) { failure = error; }
         });
@@ -57,7 +59,7 @@ public class ToolbarIntegrationTests
             form.Show();
             Application.DoEvents();
 
-            Button Find(string prefix) => form.Controls.OfType<FlowLayoutPanel>().Single().Controls
+            Button Find(string prefix) => form.Controls
                 .OfType<Button>().Single(b => b.Text.StartsWith(prefix, StringComparison.Ordinal));
             void Dwell(Point point)
             {
@@ -81,19 +83,19 @@ public class ToolbarIntegrationTests
             Dwell(target);
             Assert.True(sender.Holding);
             Select("Pause");
-            Assert.Single(form.Controls.OfType<FlowLayoutPanel>().Single().Controls);
+            Assert.Single(form.Controls);
             Dwell(target);
             Assert.Equal(new uint[] {8,16,2}, edges);
             var resume = Find("Resume");
             Dwell(resume.PointToScreen(new Point(resume.Width / 2 + 3, resume.Height / 2)));
-            Assert.NotNull(Find("Options"));
+            Assert.NotNull(Find("Setup"));
             Dwell(target);
             Assert.False(sender.Holding);
-            Select("Options");
+            Select("Setup");
             Select("Time +");
             Select("Cancel");
             Assert.Equal(2,settings.ClickTime);
-            Select("Options");
+            Select("Setup");
             Select("Time +");
             Select("OK");
             Assert.Equal(3,store.Load().ClickTime);
@@ -107,7 +109,7 @@ public class ToolbarIntegrationTests
             SendMessageW(form.Handle, 0x8005, 3, 0);
             Assert.NotNull(Find("Resume"));
             SendMessageW(form.Handle, 0x8005, 2, 0);
-            Assert.NotNull(Find("Options"));
+            Assert.NotNull(Find("Setup"));
             SendMessageW(form.Handle, 0x2b1, 7, 0);
             Dwell(target);
             Assert.Equal(4, edges.Count);
@@ -120,9 +122,9 @@ public class ToolbarIntegrationTests
             var before = form.Location;
             Dwell(new Point(before.X + 300, before.Y + 130));
             Assert.NotEqual(before, form.Location);
-            Select("Quit");
+            Select("Exit");
             Assert.Empty(edges.Skip(6));
-            Select("Quit HoverPulse");
+            Select("Exit Hover Click");
             Application.DoEvents();
             Assert.False(form.Visible);
             Assert.Contains(0x8002, receiver.Messages);

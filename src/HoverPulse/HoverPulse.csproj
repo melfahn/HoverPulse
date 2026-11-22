@@ -13,8 +13,8 @@
     <!-- <ApplicationIcon>Resources\Icons\app.ico</ApplicationIcon> -->
     <Version>0.1.0</Version>
     <Company>QuadSoft, Inc.</Company>
-    <Product>HoverPulse</Product>
-    <Description>HoverPulse — free, open-source dwell-click accessibility tool for Windows</Description>
+    <Product>Hover Click</Product>
+    <Description>Hover Click — hands-free dwell clicking for Windows</Description>
     <Copyright>Copyright (c) QuadSoft, Inc. Licensed under GPL-3.0.</Copyright>
   </PropertyGroup>
 

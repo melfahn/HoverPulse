@@ -18,8 +18,11 @@ internal sealed class ToolbarWindow : Form
     private readonly ClickSimulator _clicks;
     private readonly DragWorker? _dragWorker;
     private readonly Func<POINT?> _cursor;
-    private readonly FlowLayoutPanel _panel = new() { AutoSize = true, WrapContents = false };
-    private readonly Button _toggle = MakeButton("Pause");
+    private ToolbarPalette _palette = ToolbarPalette.For(ToolbarTheme.Neutral);
+    private ToolbarButton? _feedback;
+    private string? _lastToolbarTarget;
+    private Rectangle _divider;
+    private readonly ToolbarButton _toggle = new();
     private readonly Dictionary<Button, Action> _commands = [];
     private OverlayWindow? _overlay;
     private Point? _moveOffset;
@@ -42,14 +45,14 @@ internal sealed class ToolbarWindow : Form
         _cursor = cursor ?? (() => NativeMethods.GetCursorPos(out var point) ? point : null);
         _settings = settings;
         _selection.Restore(settings.DefaultAction);
-        Text = "HoverPulse";
+        Text = "Hover Click";
         StartPosition = FormStartPosition.Manual;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
-        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleMode = AutoScaleMode.None;
+        DoubleBuffered = true;
         BackColor = Color.FromArgb(35, 38, 42);
         Location = new Point(settings.ToolbarX, settings.ToolbarY);
-        Controls.Add(_panel);
         ApplySettings();
         LayoutButtons();
     }
@@ -65,29 +68,26 @@ internal sealed class ToolbarWindow : Form
         }
     }
 
-    private static Button MakeButton(string label) => new()
+    private void Add(string label, Action action, Glyph icon = Glyph.None, bool locked = false,
+        bool queued = false, bool held = false, ToolbarButton? existing = null)
     {
-        Text = label,
-        AccessibleName = label,
-        AutoSize = true,
-        FlatStyle = FlatStyle.Flat,
-        ForeColor = Color.White,
-        TabStop = false
-    };
-
-    private void Add(string label, Action action, bool selected = false, Button? existing = null)
-    {
-        var button = existing ?? MakeButton(label);
+        var button = existing ?? new ToolbarButton();
         button.Text = button.AccessibleName = label;
-        button.BackColor = selected ? Color.Teal : Color.FromArgb(59, 64, 70);
-        button.MinimumSize = new Size(42 + 12 * _settings.AppSize, 28 + 8 * _settings.AppSize);
+        button.AccessibleDescription = held ? "Holding drag" : locked && queued ? "Locked, selected for next click" :
+            locked ? "Locked action" : queued ? "Next click" : icon == Glyph.Resume ? _fault : null;
+        button.Icon = icon;
+        button.ShowLabel = _settings.ShowToolbarLabels;
+        button.Locked = locked;
+        button.Queued = queued;
+        button.Held = held;
+        button.Faulted = (icon == Glyph.Resume && _fault != null) || (icon == Glyph.Setup && _saveFailed);
+        button.Palette = _palette;
         if (existing == null)
         {
             button.Click += (_, _) => ActivateButton(button);
         }
-
         _commands.Add(button, action);
-        _panel.Controls.Add(button);
+        Controls.Add(button);
     }
 
     private void ActivateButton(Button button)
@@ -112,48 +112,99 @@ internal sealed class ToolbarWindow : Form
 
     private void LayoutButtons()
     {
-        _panel.SuspendLayout();
-        foreach (var control in _panel.Controls.Cast<Control>().ToArray())
+        SuspendLayout();
+        SetFeedback(null, 0);
+        foreach (var control in Controls.Cast<Control>().ToArray())
         {
-            _panel.Controls.Remove(control);
+            Controls.Remove(control);
             if (control != _toggle)
             {
                 control.Dispose();
             }
         }
         _commands.Clear();
-        _panel.FlowDirection = _settings.ToolbarHorizontal ? FlowDirection.LeftToRight : FlowDirection.TopDown;
         if (_draft is not null)
         {
             Options();
         }
         else if (_confirmQuit)
         {
-            Add("Quit HoverPulse", Close);
+            Add("Exit Hover Click", Close);
             Add("Cancel", () => { _confirmQuit = false; LayoutButtons(); });
         }
         else
         {
-            Add(_fault ?? (_detector.Paused ? "Resume" : "Pause"), () => Toggle(false), existing: _toggle);
+            Add(_detector.Paused ? "Resume" : "Pause", () => Toggle(false),
+                _detector.Paused ? Glyph.Resume : Glyph.Pause, existing: _toggle);
             if (!_detector.Paused)
             {
-                foreach (var (label, mode) in new[] { ("Double", ClickType.DoubleClick),
-                    ("Drag", ClickType.DragStart), ("Right", ClickType.RightClick), ("Left", ClickType.LeftClick) })
+                foreach (var (label, mode, icon) in new[] { ("Left", ClickType.LeftClick, Glyph.Left),
+                    ("Double", ClickType.DoubleClick, Glyph.Double), ("Drag", ClickType.DragStart, Glyph.Drag),
+                    ("Right", ClickType.RightClick, Glyph.Right) })
                 {
-                    var caption = label + (_selection.Locked == mode ? " *" : "");
-                    Add(caption, () => { _selection.Select(mode); _settings.DefaultAction = _selection.Locked; LayoutButtons(); },
-                        _selection.Temporary == mode || (mode == ClickType.DragStart && _selection.Dragging));
+                    Add(label, () => { _selection.Select(mode); _settings.DefaultAction = _selection.Locked; LayoutButtons(); },
+                        icon, _selection.Locked == mode, _selection.Temporary == mode,
+                        mode == ClickType.DragStart && _selection.Dragging);
                 }
-                Add(_saveFailed ? "Options · unsaved" : "Options", OpenOptions);
-                Add("Quit", () => { _confirmQuit = true; LayoutButtons(); });
-                Add(_moveOffset.HasValue ? "Place" : "Move", StartMove);
+                Add("Setup", OpenOptions, Glyph.Setup);
+                Add("Exit", () => { _confirmQuit = true; LayoutButtons(); }, Glyph.Exit);
+                Add(_moveOffset.HasValue ? "Place" : "Move", StartMove, _moveOffset.HasValue ? Glyph.Place : Glyph.Move);
             }
         }
-        _panel.WrapContents = true;
-        _panel.MaximumSize = Screen.FromRectangle(Bounds).WorkingArea.Size;
-        _panel.ResumeLayout(true);
-        ClientSize = _panel.GetPreferredSize(Size.Empty);
+        ArrangeButtons();
+        ResumeLayout(false);
+        Invalidate(true);
+    }
+
+    private void ArrangeButtons()
+    {
+        var area = Screen.FromPoint(Location).WorkingArea;
+        bool menu = _draft != null || _confirmQuit;
+        var layout = ToolbarLayout.Measure(_settings, DeviceDpi, area.Size, Controls.Count, menu);
+        for (int i = 0; i < Controls.Count; i++)
+        {
+            Controls[i].Bounds = layout.Targets[i];
+        }
+        ClientSize = layout.Shell;
+        _divider = Rectangle.Empty;
+        if (!menu && Controls.Count >= 6)
+        {
+            var previous = layout.Targets[4];
+            var next = layout.Targets[5];
+            int thickness = Math.Max(1, ToolbarLayout.Pixels(1,DeviceDpi));
+            if (previous.Top == next.Top)
+            {
+                _divider = new((previous.Right+next.Left)/2, next.Top+next.Height/8, thickness, next.Height*3/4);
+            }
+            else if (previous.Left == next.Left)
+            {
+                _divider = new(next.Left+next.Width/8, (previous.Bottom+next.Top)/2, next.Width*3/4, thickness);
+            }
+        }
+        using var path = ToolbarButton.Corners(ClientRectangle, ToolbarLayout.Pixels(5,DeviceDpi));
+        var prior = Region;
+        Region = new Region(path);
+        prior?.Dispose();
         KeepReachable();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        float stroke = DeviceDpi / 96f;
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var border = new Pen(_palette.ShellBorder,stroke);
+        using var path = ToolbarButton.Corners(new(stroke/2,stroke/2,ClientSize.Width-stroke,ClientSize.Height-stroke),5*stroke);
+        e.Graphics.DrawPath(border,path);
+        using var separator = new SolidBrush(_palette.Border);
+        e.Graphics.FillRectangle(separator,_divider);
+    }
+
+    private void SetFeedback(ToolbarButton? button, double progress)
+    {
+        if (_feedback != button && _feedback != null) { _feedback.Progress = 0; }
+        _feedback = button;
+        if (button != null) { button.Progress = progress; }
     }
 
     private void OpenOptions()
@@ -172,12 +223,18 @@ internal sealed class ToolbarWindow : Form
         Add("Time +", () => Change(() => draft.ClickTime = Math.Min(50, draft.ClickTime + 1)));
         Add($"Motion − {draft.MoveLimit}px", () => Change(() => draft.MoveLimit = Math.Max(2, draft.MoveLimit - 1)));
         Add("Motion +", () => Change(() => draft.MoveLimit = Math.Min(20, draft.MoveLimit + 1)));
-        Add($"Size {draft.AppSize}", () => Change(() => draft.AppSize = draft.AppSize % 3 + 1));
+        Add($"Size · {TargetSize.For(draft.AppSize).Name}", () => Change(() => draft.AppSize = (draft.AppSize + 1) % 4));
+        string theme = draft.Theme switch { ToolbarTheme.Neutral => "Black and gray", ToolbarTheme.Blue => "Blue dark", _ => "Light" };
+        Add($"Theme · {theme}", () => Change(() => draft.Theme = (ToolbarTheme)(((int)draft.Theme + 1) % 3)));
+        Add(draft.ShowToolbarLabels ? "Labels on" : "Labels off", () => Change(() => draft.ShowToolbarLabels = !draft.ShowToolbarLabels));
+        Add($"Padding −  {draft.ToolbarPadding} DIP", () => Change(() => draft.ToolbarPadding = Math.Max(0,draft.ToolbarPadding-1)));
+        Add("Padding +", () => Change(() => draft.ToolbarPadding = Math.Min(24,draft.ToolbarPadding+1)));
         string[] floatNames = ["On", "Off", "Always"];
         Add($"Float {floatNames[draft.FloatMode]}", () => Change(() => draft.FloatMode = (draft.FloatMode + 1) % 3));
         Add(draft.AudioEnabled ? "Sound on" : "Sound off", () => Change(() => draft.AudioEnabled = !draft.AudioEnabled));
         Add(draft.AlternateInput ? "SendInput" : "Legacy input", () => Change(() => draft.AlternateInput = !draft.AlternateInput));
         Add("Bedroom profile", () => Change(() => _draft = new AppSettings()));
+        if (_saveFailed) { Add("Retry saving", Save); }
         Add("OK", () =>
         {
             _settings = draft;
@@ -193,6 +250,8 @@ internal sealed class ToolbarWindow : Form
 
     private void ApplySettings()
     {
+        _palette = ToolbarPalette.For(_settings.Theme);
+        BackColor = _palette.Shell;
         if (!_settings.ShowIndicator)
         {
             _overlay?.Hide();
@@ -206,7 +265,7 @@ internal sealed class ToolbarWindow : Form
 
     private void KeepReachable()
     {
-        Rectangle bounds = Screen.FromRectangle(Bounds).WorkingArea;
+        Rectangle bounds = Screen.FromPoint(Location).WorkingArea;
         Location = new Point(Math.Clamp(Left, bounds.Left, Math.Max(bounds.Left, bounds.Right - Width)),
             Math.Clamp(Top, bounds.Top, Math.Max(bounds.Top, bounds.Bottom - Height)));
     }
@@ -225,6 +284,7 @@ internal sealed class ToolbarWindow : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        ArrangeButtons();
         _dragWorker?.Prepare();
         _toggle.Click += (_, _) => ActivateButton(_toggle);
         if (NativeMethods.SetTimer(Handle, 1, 100, 0) == 0)
@@ -290,11 +350,17 @@ internal sealed class ToolbarWindow : Form
             var hwnd = NativeMethods.WindowFromPoint(p);
             if (hwnd == 0) { _detector.Reset(); return; }
             var hit = Control.FromHandle(hwnd);
-            var button = hit as Button;
+            var button = hit as ToolbarButton;
             bool onToggle = button != null && button == _toggle && _commands.ContainsKey(button);
             bool owned = hit?.FindForm() == this;
-            if (!_detector.Sample(p, onToggle))
+            if (!_detector.Paused && _lastToolbarTarget != button?.AccessibleName)
             {
+                _detector.CancelPending();
+            }
+            if (!_detector.Paused) { _lastToolbarTarget = button?.AccessibleName; }
+            if (!_detector.Sample(p, onToggle, !owned || button != null))
+            {
+                SetFeedback(button, _detector.Progress);
                 if (_settings.ShowIndicator && !owned && !_detector.Paused && _detector.Progress > 0)
                 {
                     _overlay?.UpdateProgress(p, _detector.Progress);
@@ -306,6 +372,7 @@ internal sealed class ToolbarWindow : Form
 
                 return;
             }
+            SetFeedback(null, 0);
             _overlay?.Hide();
             if (onToggle)
             {
@@ -416,10 +483,16 @@ internal sealed class ToolbarWindow : Form
             }
             if (m.Msg == 0x7e)
             {
-                KeepReachable();
+                ArrangeButtons();
             }
         }
         base.WndProc(ref m);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        if (Controls.Count > 0) { ArrangeButtons(); Invalidate(true); }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

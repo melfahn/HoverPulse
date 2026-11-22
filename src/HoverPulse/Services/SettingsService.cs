@@ -4,6 +4,8 @@ using HoverPulse.Core;
 
 namespace HoverPulse.Services;
 
+internal enum ToolbarTheme { Neutral, Light, Blue }
+
 internal sealed class AppSettings
 {
     public int SchemaVersion { get; set; } = 2;
@@ -13,10 +15,13 @@ internal sealed class AppSettings
     public bool AlternateInput { get; set; }
     public bool AudioEnabled { get; set; }
     public int AppSize { get; set; } = 1;
+    public ToolbarTheme Theme { get; set; } = ToolbarTheme.Neutral;
+    public bool ShowToolbarLabels { get; set; }
+    public int ToolbarPadding { get; set; } = 4;
     public int FloatMode { get; set; } = 2;
     public bool ShowIndicator { get; set; }
     public string IndicatorColor { get; set; } = "#3399FF";
-    public float ToolbarOpacity { get; set; } = 0.9f;
+    public float ToolbarOpacity { get; set; } = 1f;
     public int ToolbarX { get; set; } = 980;
     public int ToolbarY { get; set; } = 24;
     public bool ToolbarHorizontal { get; set; } = true;
@@ -28,7 +33,9 @@ internal sealed class AppSettings
     {
         ClickTime = Math.Clamp(ClickTime, 1, 50);
         MoveLimit = Math.Clamp(MoveLimit, 2, 20);
-        AppSize = Math.Clamp(AppSize, 1, 3);
+        AppSize = Math.Clamp(AppSize, 0, 3);
+        ToolbarPadding = Math.Clamp(ToolbarPadding, 0, 24);
+        if (!Enum.IsDefined(Theme)) { Theme = ToolbarTheme.Neutral; }
         FloatMode = Math.Clamp(FloatMode, 0, 2);
         try { _ = System.Drawing.ColorTranslator.FromHtml(IndicatorColor); }
         catch (Exception error) when (error is ArgumentException or FormatException) { IndicatorColor = "#3399FF"; }

@@ -100,7 +100,8 @@ public sealed class ReleaseReceiver : Form
             if (owner != pid || !IsWindowVisible(window)) return true;
             var title = new StringBuilder(64);
             GetWindowTextW(window, title, title.Capacity);
-            if (title.ToString() != "HoverPulse") return true;
+            string caption = title.ToString();
+            if (caption != "Hover Click" && caption != "HoverPulse") return true;
             result = window;
             return false;
         }, IntPtr.Zero);
