@@ -14,7 +14,9 @@ param(
     [switch]$CheckReconnect,
     [switch]$CheckBoundaries,
     [switch]$CheckDesign,
+    [switch]$CheckMixedDpi,
     [ValidateRange(0,768)][int]$ExpectedDpi = 0,
+    [ValidateRange(1200,60000)][int]$DragHoldMilliseconds = 1200,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -59,6 +61,7 @@ if ($ExpectedSHA256 -and $hash -ne $ExpectedSHA256) { throw 'The staged executab
 $isReference = $Product -eq 'Reference'
 if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
+if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($isReference -and $hash -ne 'CB8D235299FFAB67C950DC6D96B00CBD269C0691B43CADE368C7735F5B95CA15') {
     throw 'Reference hash mismatch.'
@@ -82,11 +85,11 @@ if ($isReference) {
     @{SchemaVersion=2;ClickTime=2;MoveLimit=5;AlternateInput=$Alternate.IsPresent;ToolbarX=0;ToolbarY=24} |
         ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
 }
-$previousDpi = if ($CheckDesign) { [ReleaseReceiver]::EnterPerMonitorDpi() }
+$previousDpi = if ($CheckDesign -or $CheckMixedDpi) { [ReleaseReceiver]::EnterPerMonitorDpi() }
 $receiver = New-Object ReleaseReceiver
-if ($CheckDesign) {
+if ($CheckDesign -or $CheckMixedDpi) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
-    $receiver.Bounds = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $receiver.Bounds = if ($CheckMixedDpi) { [Windows.Forms.SystemInformation]::VirtualScreen } else { [Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
 }
 $app = $null
 $passed = $false
@@ -130,7 +133,7 @@ try {
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'double click' 'LD,LU,LD,LU'
         Select-Mode 'Drag' 1002
-        $receiver.Hold($receiver.Handle,30,1200)
+        $receiver.Hold($receiver.Handle,30,$DragHoldMilliseconds)
         Check-Edges 'start drag' 'LD'
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
@@ -176,6 +179,10 @@ try {
         & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -ExpectedDpi $ExpectedDpi
         Check-Edges 'internal design and Setup actions' ''
         if (!$app.WaitForExit(5000) -or $app.ExitCode -ne 0) { throw 'Confirmed hands-free exit failed.' }
+    }
+    if ($CheckMixedDpi) {
+        & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -MixedDpi
+        Check-Edges 'moving between monitors' ''
     }
     if ($CheckReconnect) {
         Select-Mode 'Pause' 1000
@@ -253,10 +260,10 @@ finally {
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)
     @{ Product=$Product; SHA256=$hash; Passed=$passed; Host=$computer.Name; Model=$computer.Model;
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
-       Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5;
+       Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent;
-       CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent } |
+       CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     $receiver.Dispose()
     if ($previousDpi) { [ReleaseReceiver]::RestoreDpi($previousDpi) }

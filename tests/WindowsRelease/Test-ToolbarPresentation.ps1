@@ -1,7 +1,7 @@
 # Invoked inside the reserved login by Test-GuestDelivery after its native action sequence.
 [CmdletBinding()]
 param([Parameter(Mandatory)][IntPtr]$Window, [Parameter(Mandatory)]$Receiver,
-      [Parameter(Mandatory)][string]$OutputDirectory, [int]$ExpectedDpi)
+      [Parameter(Mandatory)][string]$OutputDirectory, [int]$ExpectedDpi, [switch]$MixedDpi)
 $ErrorActionPreference = 'Stop'
 $dpi = [int][ReleaseReceiver]::GetDpiForWindow($Window)
 if ($dpi -le 0 -or ($ExpectedDpi -and $dpi -ne $ExpectedDpi)) { throw "Expected DPI $ExpectedDpi, observed $dpi." }
@@ -68,6 +68,32 @@ function Read-Face([int]$Size,[int]$Theme,[bool]$Labels,[int]$Padding) {
     }
     $receipts.Add([pscustomobject]@{Dpi=$dpi;Size=$Size;Theme=$Theme;Labels=$Labels;Padding=$Padding;Width=$widthPx;Height=$heightPx})
 }
+if ($MixedDpi) {
+    $screens = @([Windows.Forms.Screen]::AllScreens | Sort-Object { !$_.Primary })
+    if ($screens.Count -lt 2) { throw 'This session exposes only one Windows display.' }
+    Select-Control 'Setup'
+    Select-Control 'OK'
+    foreach ($screen in @($screens[1],$screens[0])) {
+        Select-Control 'Move'
+        $null = Find-Control 'Place'
+        $bounds = $screen.WorkingArea
+        $Receiver.HoldScreenPoint($Receiver.Handle,($bounds.Left+[int]($bounds.Width/2)),($bounds.Top+160),1600)
+        $null = Find-Control 'Move'
+        $dpi = [int][ReleaseReceiver]::GetDpiForWindow($Window)
+        $shell = [ReleaseReceiver]::ScreenBounds($Window)
+        if (!$bounds.Contains($shell)) { throw "Toolbar is outside $($screen.DeviceName) after placement." }
+        Read-Face 1 0 $false 4
+        $anchor = [ReleaseReceiver]::ScreenBounds((Find-Control 'Pause'))
+        Select-Control 'Pause'
+        if (!$anchor.Equals([ReleaseReceiver]::ScreenBounds((Find-Control 'Resume')))) { throw 'Resume shifted after a monitor transition.' }
+        $Receiver.Hold((Find-Control 'Resume'),4,1200)
+        $null = Find-Control 'Move'
+    }
+    $receipts | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'monitor-transitions.json')
+    if (@($receipts.Dpi | Sort-Object -Unique).Count -lt 2) { throw 'Both Windows displays reported the same toolbar DPI.' }
+    return
+}
+
 # Double-dwell locking and held drag have distinct paint and Windows button state.
 Select-Control 'Right'
 Select-Control 'Right'
