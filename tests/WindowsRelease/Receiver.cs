@@ -38,9 +38,19 @@ public sealed class ReleaseReceiver : Form
 
     public void Hold(IntPtr handle, int offsetX, int milliseconds)
     {
+        HoldAt(handle, offsetX, 0, milliseconds);
+    }
+
+    public void HoldAt(IntPtr handle, int offsetX, int offsetY, int milliseconds)
+    {
         RECT rect;
         if (!IsWindowVisible(handle) || !GetWindowRect(handle, out rect)) throw new Exception("Missing target");
-        int x = (rect.l + rect.r) / 2 + offsetX, y = (rect.t + rect.b) / 2;
+        int x = (rect.l + rect.r) / 2 + offsetX, y = (rect.t + rect.b) / 2 + offsetY;
+        HoldScreenPoint(handle, x, y, milliseconds);
+    }
+
+    public void HoldScreenPoint(IntPtr handle, int x, int y, int milliseconds)
+    {
         if (WindowFromPoint(new Point(x,y)) != handle) throw new Exception("Target is occluded");
         Trace.Add(String.Format("{0:F3} sample-target {1} {2} {3}", clock.Elapsed.TotalMilliseconds,handle,x,y));
         if (!SetCursorPos(x,y)) throw new Exception("Failed to position test pointer");

@@ -11,6 +11,7 @@ param(
     [switch]$CheckOrderlyExit,
     [switch]$CheckForcedExit,
     [switch]$CheckReconnect,
+    [switch]$CheckBoundaries,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -133,6 +134,33 @@ try {
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
         }
     } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
+    if ($CheckBoundaries) {
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'boundary baseline' 'LD,LU'
+        $receiver.HoldAt($receiver.Handle,4,4,1200)
+        Check-Edges 'four pixels on both axes' ''
+        $receiver.HoldAt($receiver.Handle,8,8,1200)
+        Check-Edges 'two four-pixel steps from the baseline' ''
+        $receiver.HoldAt($receiver.Handle,13,8,1200)
+        Check-Edges 'five pixels on x' 'LD,LU'
+        $receiver.HoldAt($receiver.Handle,13,3,1200)
+        Check-Edges 'minus five pixels on y' 'LD,LU'
+        $receiver.HoldAt($receiver.Handle,13,3,3000)
+        Check-Edges 'stationary after dispatch' ''
+        Select-Mode 'Pause' 1000
+        $anchor = [Windows.Forms.Cursor]::Position
+        $toggle = [ReleaseReceiver]::Button($window,'Resume',1000,$isReference)
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'off the paused toggle' ''
+        $receiver.HoldScreenPoint($toggle,($anchor.X + 1),$anchor.Y,1200)
+        Check-Edges 'one pixel on toggle' ''
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'one-pixel paused rearm stays latched' ''
+        $receiver.HoldScreenPoint($toggle,($anchor.X + 3),$anchor.Y,1200)
+        Check-Edges 'two further pixels on toggle' ''
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'two-pixel paused rearm resumes' 'LD,LU'
+    }
     if ($CheckReconnect) {
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
@@ -193,7 +221,8 @@ finally {
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
-       LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent } |
+       LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent;
+       CheckedBoundaries=$CheckBoundaries.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     $receiver.Dispose()
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($false) }
