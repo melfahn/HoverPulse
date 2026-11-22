@@ -13,6 +13,7 @@ param(
     [switch]$CheckForcedExit,
     [switch]$CheckReconnect,
     [switch]$CheckLock,
+    [switch]$CheckMonitorRemoval,
     [switch]$CheckBoundaries,
     [switch]$CheckDesign,
     [switch]$CheckMixedDpi,
@@ -65,6 +66,7 @@ if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExi
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($CheckLock -and !$CheckReconnect) { throw 'Lock testing requires an authenticated reconnect coordinator.' }
+if ($CheckMonitorRemoval -and !$CheckReconnect) { throw 'Monitor removal requires a reconnect to a single-display client.' }
 if ($isReference -and $hash -ne 'CB8D235299FFAB67C950DC6D96B00CBD269C0691B43CADE368C7735F5B95CA15') {
     throw 'Reference hash mismatch.'
 }
@@ -87,11 +89,11 @@ if ($isReference) {
     @{SchemaVersion=2;ClickTime=2;MoveLimit=5;AlternateInput=$Alternate.IsPresent;ToolbarX=0;ToolbarY=24} |
         ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
 }
-$previousDpi = if ($CheckDesign -or $CheckMixedDpi) { [ReleaseReceiver]::EnterPerMonitorDpi() }
+$previousDpi = if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) { [ReleaseReceiver]::EnterPerMonitorDpi() }
 $receiver = New-Object ReleaseReceiver
-if ($CheckDesign -or $CheckMixedDpi) {
+if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
-    $receiver.Bounds = if ($CheckMixedDpi) { [Windows.Forms.SystemInformation]::VirtualScreen } else { [Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
+    $receiver.Bounds = if ($CheckMixedDpi -or $CheckMonitorRemoval) { [Windows.Forms.SystemInformation]::VirtualScreen } else { [Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
 }
 $app = $null
 $passed = $false
@@ -188,6 +190,13 @@ try {
         Check-Edges 'moving between monitors' ''
     }
     if ($CheckReconnect) {
+        if ($CheckMonitorRemoval) {
+            $second = [Windows.Forms.Screen]::AllScreens | Where-Object { !$_.Primary } | Select-Object -First 1
+            if (!$second) { throw 'A second Windows display is required for removal.' }
+            Select-Mode 'Move' 0
+            $receiver.HoldScreenPoint($receiver.Handle,($second.WorkingArea.Left+[int]($second.WorkingArea.Width/2)),($second.WorkingArea.Top+160),1600)
+            if (!$second.WorkingArea.Contains([ReleaseReceiver]::ScreenBounds($window))) { throw 'Toolbar did not move onto the display to remove.' }
+        }
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'paused before RDP disconnect' ''
@@ -200,11 +209,20 @@ try {
                 [ReleaseReceiver]::Pump(50)
             }
         }
-        @{ProcessId=$app.Id; SessionId=$session; Width=[Windows.Forms.Screen]::PrimaryScreen.Bounds.Width} |
+        @{ProcessId=$app.Id; SessionId=$session; Width=[Windows.Forms.Screen]::PrimaryScreen.Bounds.Width;
+          Displays=[Windows.Forms.Screen]::AllScreens.Count; Toolbar=[ReleaseReceiver]::ScreenBounds($window).ToString()} |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'ready-for-reconnect.json')
         $reconnect = [Diagnostics.Stopwatch]::StartNew()
         while (!(Test-Path -LiteralPath (Join-Path $out 'reconnected'))) {
             if ($app.HasExited -or $reconnect.Elapsed.TotalMinutes -ge 4) { throw 'RDP reconnect did not complete.' }
+            [ReleaseReceiver]::Pump(100)
+        }
+        if ($CheckMonitorRemoval) {
+            $area = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+            if ([Windows.Forms.Screen]::AllScreens.Count -ne 1 -or !$area.Contains([ReleaseReceiver]::ScreenBounds($window))) {
+                throw 'Resume is not reachable on the remaining display.'
+            }
+            $receiver.Bounds = $area
             [ReleaseReceiver]::Pump(100)
         }
         $receiver.Hold($receiver.Handle,0,1200)
@@ -276,7 +294,8 @@ finally {
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent; CheckedLock=$CheckLock.IsPresent; SessionEvents=@($receiver.SessionEvents);
-       CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent } |
+       CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent;
+       CheckedMonitorRemoval=$CheckMonitorRemoval.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     if ($registered) { [void][ReleaseReceiver]::WTSUnRegisterSessionNotification($receiver.Handle) }
     $receiver.Dispose()
