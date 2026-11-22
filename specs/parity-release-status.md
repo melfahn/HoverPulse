@@ -2,11 +2,21 @@
 
 **The current x64 candidate is `caa0e23`, SHA-256 `A2D5942B2926AD4EEABCD9DE30315FC06119951E2BF2A045462BD400A40D404B`.** It samples the cursor in NaturalPoint's DPI-unaware coordinate space and uses the physical cursor for toolbar targets. All 24 isolated tests passed. The Windows x64 and ARM64 publish directories have per-file manifests. Native results identify their specific build.
 
+On this exact executable, both backends passed ordinary action delivery, duplicate-instance handling, orderly exit during a held drag, forced termination of the toolbar during a held drag, and a seven-second drag hold followed by pause, resume and drop. Actual Windows controls passed all 48 presentation combinations across 96 and 144 DPI. A newly launched process restored the saved position, size, palette, labels and padding.
+
+A single interactive Windows login exposed two simultaneous RDP displays at different scales. Moving the toolbar changed its measured DPI between 96 and 144, with matching target bounds, paint and anchored Resume. Dropping the display that held the paused toolbar left Resume reachable on the remaining display. The same candidate recovered from real session lock/unlock, authenticated reconnect and S3 suspend/resume. Kernel power events and Windows session notifications were recorded.
+
+With the executable and its positive-control receiver running at verified low integrity, neither backend delivered input to the foreground medium-integrity receiver. Both subsequently delivered exactly one down/up pair to the equal-integrity receiver. Neither displayed a failure cue during the blocked attempt. These observations cover low-to-medium isolation. The test did not grant UIAccess or elevate a test user.
+
+The elapsed-time soak on the revised executable uses the captured legacy-backend settings. Its result requires the final receiver trace and process-identity audit.
+
 The first redesigned executable (`016eece`, x64 SHA-256 `459854BD3A16600AB7715C20533BC58BCFFA6ABA634858F22C44971D51CA989A`) passed 23 isolated tests, the full hands-free presentation sequence at measured 96 and 144 DPI, authenticated reconnect, and both drag-exit checks on both backends. All 48 appearance combinations matched their expected target bounds and palette samples. Both presentation runs covered saved and cancelled padding, mode locking, held drag, anchored Resume, Move/Place and confirmed Exit, with zero stray receiver clicks.
 
 At 150% scale that build disagreed with the signed reference on 14 of 30 controlled physical pointer moves. The reference rearmed on a step of 5 in its own Windows coordinate space. The 30 measurements included movement on both axes from three raster origins. An intermediate build (`8eb2b42`) selected a neighboring toolbar button at 150% and was withdrawn. The corrected build matched all 30 reference decisions and all receiver coordinates across 90 target placements. In the 70 paired left-click observations, median latency was 408.5 ms on the reference and 408.7 ms on the candidate. The corresponding 95th percentiles were 455.8 and 456.6 ms.
 
 The previous x64 build (`3F78BA7A…6455`) completed 336 full native endurance cycles before the receiver missed the drop after Resume in the next cycle. The run ended after 4,334 seconds. The last trace shows a drag-down and then a 6.4-second interval before the pointer moved to Pause. The cause is unresolved. This was a failed endurance run. Subsequent qualification captures the toolbar, pointer and Windows button state before cleanup when any phase fails.
+
+## Earlier baseline checks
 
 | Evidence | Result |
 |---|---|
@@ -16,9 +26,9 @@ The previous x64 build (`3F78BA7A…6455`) completed 336 full native endurance c
 | Windows UI | A separate thread attached to a newly created, undisplayed Windows desktop. Real controls and synthetic samples exercised toolbar selection, pause during drag, hands-free resume and drop, options cancel/apply, moving the toolbar and confirmed quit. A companion test window verified registration, acknowledgment and quit notification. Synthetic session messages exercised lock, unlock, resume and display-change handling. |
 | Settings | Version-one backup and migration, correct false and zero values, negative coordinates, range validation, future-version rejection and recovery from a corrupt primary passed. |
 | Native comparison | On Windows 11 x64 build 26200, the signed reference and candidate each passed the right, default-left, double, drag, pause, resume and drop sequence on both native backends. The receiver saw the same ten button edges at the same coordinates in all four runs. One cycle per configuration establishes ordering and target delivery. |
-| Environment and endurance | Actual sleep, explicit lock/unlock, multiple monitors/DPI, restricted targets, ARM64 execution and the eight-hour elapsed-time soak remain open. |
+| Environment and endurance | This earlier baseline did not complete endurance. See the current candidate results above for display, sleep, lock, reconnect and restricted-input coverage. ARM64 has been cross-published and has no runtime pass. |
 
-The normalized tick trace uses an explicit first sample as its baseline. Runtime startup phase, modal behavior, toolbar geometry, float behavior and companion communication should be checked against the pinned NaturalPoint build in the guest. The candidate uses Windows Forms controls and keeps its own settings. A clean candidate profile starts with the captured reference settings.
+The normalized tick trace uses an explicit first sample as its baseline. Runtime timing, modal behavior, float behavior and companion communication can be compared against the pinned NaturalPoint build in the reserved login. The candidate uses Windows Forms controls and keeps its own settings. A clean candidate profile starts with the captured reference settings.
 
 ## Process lifetime checks
 

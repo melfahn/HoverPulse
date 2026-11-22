@@ -68,6 +68,7 @@ if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit co
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
 if ($RestrictedPeer -and ($isReference -or $SoakHours -or $CheckDesign -or $CheckReconnect -or $CheckMixedDpi -or $CheckForcedExit -or $CheckOrderlyExit -or $CheckBoundaries -or $MeasureMotion -or $RestoreDesignProfile)) { throw 'The input-integrity check requires a separate candidate run.' }
+if ($RestrictedPeer -and !$ExpectedSHA256) { throw 'The input-integrity fixture needs the expected candidate hash.' }
 if ($RestoreDesignProfile -and ($isReference -or $CheckDesign -or $CheckMixedDpi)) { throw 'Restore a saved design in a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($CheckLock -and !$CheckReconnect) { throw 'Lock testing requires an authenticated reconnect coordinator.' }
@@ -115,7 +116,22 @@ try {
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($true) }
     $receiver.Show()
     $receiver.Hold($receiver.Handle,-48,100)
-    $app = Start-Process -FilePath $exe.FullName -PassThru
+    if ($RestrictedPeer) {
+        $lowTemp = Join-Path $env:USERPROFILE ('AppData\LocalLow\HoverClick-QA\' + [Guid]::NewGuid().ToString('N'))
+        $null = New-Item -ItemType Directory -Path $lowTemp -Force
+        & icacls $lowTemp /setintegritylevel '(OI)(CI)L' | Out-Null
+        if ($LASTEXITCODE) { throw 'Could not prepare the confined runtime directory.' }
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = $exe.FullName
+        $start.UseShellExecute = $false
+        $start.WorkingDirectory = $lowTemp
+        $start.EnvironmentVariables['TEMP'] = $lowTemp
+        $start.EnvironmentVariables['TMP'] = $lowTemp
+        $start.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] = $lowTemp
+        $app = [Diagnostics.Process]::Start($start)
+    } else {
+        $app = Start-Process -FilePath $exe.FullName -PassThru
+    }
     $startup = [Diagnostics.Stopwatch]::StartNew()
     do {
         $app.Refresh()
@@ -319,7 +335,13 @@ catch {
     try {
         $detail.WindowsLeftDown = [ReleaseReceiver]::LeftDown()
         $detail.Pointer = [Windows.Forms.Cursor]::Position.ToString()
-        if ($app -and !$app.HasExited -and $window) {
+        if ($app -and !$app.HasExited) {
+            $app.Refresh()
+            $detail.ProcessId = $app.Id
+            $detail.MainWindowTitle = $app.MainWindowTitle
+            if ($app.MainWindowHandle -ne [IntPtr]::Zero) { $detail.MainWindowControls = [ReleaseReceiver]::VisibleLabels($app.MainWindowHandle) }
+        }
+        if ($app -and !$app.HasExited -and $window -and $window -ne [IntPtr]::Zero) {
             $detail.ToolbarDpi = [ReleaseReceiver]::GetDpiForWindow($window)
             $detail.ToolbarBounds = [ReleaseReceiver]::ScreenBounds($window).ToString()
             if (!$isReference) { $detail.VisibleControls = [ReleaseReceiver]::VisibleLabels($window) }
