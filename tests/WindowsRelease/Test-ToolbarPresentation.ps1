@@ -1,7 +1,7 @@
 # Invoked inside the reserved login by Test-GuestDelivery after its native action sequence.
 [CmdletBinding()]
 param([Parameter(Mandatory)][IntPtr]$Window, [Parameter(Mandatory)]$Receiver,
-      [Parameter(Mandatory)][string]$OutputDirectory, [int]$ExpectedDpi, [switch]$MixedDpi)
+      [Parameter(Mandatory)][string]$OutputDirectory, [int]$ExpectedDpi, [switch]$MixedDpi, [switch]$Restored)
 $ErrorActionPreference = 'Stop'
 $dpi = [int][ReleaseReceiver]::GetDpiForWindow($Window)
 if ($dpi -le 0 -or ($ExpectedDpi -and $dpi -ne $ExpectedDpi)) { throw "Expected DPI $ExpectedDpi, observed $dpi." }
@@ -67,6 +67,14 @@ function Read-Face([int]$Size,[int]$Theme,[bool]$Labels,[int]$Padding) {
         throw 'Rendered preferences differ from saved preferences.'
     }
     $receipts.Add([pscustomobject]@{Dpi=$dpi;Size=$Size;Theme=$Theme;Labels=$Labels;Padding=$Padding;Width=$widthPx;Height=$heightPx})
+}
+if ($Restored) {
+    $saved = Get-Content (Join-Path $env:APPDATA 'HoverPulse\settings.json') -Raw | ConvertFrom-Json
+    $shell = [ReleaseReceiver]::ScreenBounds($Window)
+    if ($shell.X -ne $saved.ToolbarX -or $shell.Y -ne $saved.ToolbarY) { throw 'Saved toolbar position did not survive restart.' }
+    Read-Face 0 2 $true 5
+    $receipts | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory 'restored.json')
+    return
 }
 if ($MixedDpi) {
     $screens = @([Windows.Forms.Screen]::AllScreens | Sort-Object { !$_.Primary })

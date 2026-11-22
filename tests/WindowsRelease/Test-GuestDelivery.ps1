@@ -16,6 +16,7 @@ param(
     [switch]$CheckMonitorRemoval,
     [switch]$CheckBoundaries,
     [switch]$CheckDesign,
+    [string]$RestoreDesignProfile,
     [switch]$CheckMixedDpi,
     [ValidateRange(0,768)][int]$ExpectedDpi = 0,
     [ValidateRange(1200,60000)][int]$DragHoldMilliseconds = 1200,
@@ -64,6 +65,7 @@ $isReference = $Product -eq 'Reference'
 if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
 if ($CheckDesign -and ($CheckReconnect -or $CheckOrderlyExit -or $CheckForcedExit)) { throw 'The presentation run ends with hands-free exit and needs its own login run.' }
 if ($CheckMixedDpi -and ($isReference -or $CheckDesign)) { throw 'Mixed-DPI checks require a separate candidate run.' }
+if ($RestoreDesignProfile -and ($isReference -or $CheckDesign -or $CheckMixedDpi)) { throw 'Restore a saved design in a separate candidate run.' }
 if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($CheckLock -and !$CheckReconnect) { throw 'Lock testing requires an authenticated reconnect coordinator.' }
 if ($CheckMonitorRemoval -and !$CheckReconnect) { throw 'Monitor removal requires a reconnect to a single-display client.' }
@@ -86,10 +88,14 @@ if ($isReference) {
     $file = Join-Path $folder 'settings.json'
     if (Test-Path $folder) { throw 'Use a fresh candidate test profile.' }
     [IO.Directory]::CreateDirectory($folder) | Out-Null
-    @{SchemaVersion=2;ClickTime=2;MoveLimit=5;AlternateInput=$Alternate.IsPresent;ToolbarX=0;ToolbarY=24} |
-        ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
+    if ($RestoreDesignProfile) {
+        Copy-Item -LiteralPath $RestoreDesignProfile -Destination $file
+    } else {
+        @{SchemaVersion=2;ClickTime=2;MoveLimit=5;AlternateInput=$Alternate.IsPresent;ToolbarX=0;ToolbarY=24} |
+            ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
+    }
 }
-$previousDpi = if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) { [ReleaseReceiver]::EnterPerMonitorDpi() }
+$previousDpi = if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval -or $RestoreDesignProfile) { [ReleaseReceiver]::EnterPerMonitorDpi() }
 $receiver = New-Object ReleaseReceiver
 if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
@@ -114,6 +120,9 @@ try {
         [ReleaseReceiver]::Pump(100)
         $window = if ($isReference) { $app.MainWindowHandle } else { [ReleaseReceiver]::CandidateToolbar($app.Id) }
     } until ($window -ne 0)
+    if ($RestoreDesignProfile) {
+        & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -Restored
+    }
     function Check-Edges([string]$Phase,[string]$Expected) {
         $actual = $receiver.Edges -join ','
         if ($actual -ne $Expected) { throw "Cycle $cycles, ${Phase}: expected [$Expected], received [$actual]." }
@@ -302,7 +311,7 @@ finally {
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent; CheckedLock=$CheckLock.IsPresent; SessionEvents=@($receiver.SessionEvents);
        CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent; CheckedMixedDpi=$CheckMixedDpi.IsPresent;
-       CheckedMonitorRemoval=$CheckMonitorRemoval.IsPresent } |
+       CheckedMonitorRemoval=$CheckMonitorRemoval.IsPresent; CheckedRestoredProfile=[bool]$RestoreDesignProfile } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     if ($registered) { [void][ReleaseReceiver]::WTSUnRegisterSessionNotification($receiver.Handle) }
     $receiver.Dispose()
