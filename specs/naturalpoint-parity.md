@@ -20,6 +20,10 @@ The reference is the verified x86 executable, SHA-256 `CB8D235299FFAB67C950DC6D9
 
 **Timing range correction.** The installed English dialog prints 0.1 and 2 seconds. Its initialization at 01002552–01002591 sets the time trackbar to **1–50** and the movement trackbar to **2–20**. Copied MFC42 ordinal 6111 sends trackbar range-min and range-max messages. Use the selectable range. For the user’s setting of 2, the third qualifying sample after a reset dispatches. Keep the displayed setting distinct from a guarantee of elapsed milliseconds.
 
+### Coordinate units at different display scales
+
+The signed reference is DPI-unaware. At 150% Windows scaling a 6-physical-pixel step measured 4 reference units. A 7-pixel step measured 4 or 5 units depending on its starting coordinate. Across 30 horizontal and vertical trials, exactly the steps reaching 5 reference units rearmed ordinary dwell. The detector reads Windows' DPI-unaware cursor coordinates for this comparison. The toolbar uses the physical position for target hit testing, drag placement and monitor-aware paint. The paused toggle uses the same reference coordinates for its 2-unit rearm threshold.
+
 ### Clean reference profile
 
 The profile reads in the pinned reference executable pass these fallback values when a registry value is absent. The settings-reader calls between 0x01004641 and 0x01004711 supply the defaults. Its settings names come from the executable's read-only string data.

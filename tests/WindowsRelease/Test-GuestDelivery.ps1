@@ -15,6 +15,7 @@ param(
     [switch]$CheckLock,
     [switch]$CheckMonitorRemoval,
     [switch]$CheckBoundaries,
+    [switch]$MeasureMotion,
     [switch]$CheckDesign,
     [string]$RestoreDesignProfile,
     [switch]$CheckMixedDpi,
@@ -168,29 +169,53 @@ try {
             }
         }
     } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
+    if ($MeasureMotion) {
+        $observations = foreach ($origin in 0,1,2) {
+            foreach ($delta in 4,5,6,7,8) {
+                foreach ($axis in 'X','Y') {
+                    $receiver.Hold($receiver.Handle,40,850)
+                    Check-Edges 'measurement rearm' 'LD,LU'
+                    $receiver.HoldAt($receiver.Handle,$origin,$origin,850)
+                    Check-Edges 'measurement baseline' 'LD,LU'
+                    $before = [ReleaseReceiver]::CursorForWindow($window)
+                    $dx = if ($axis -eq 'X') { $delta } else { 0 }
+                    $dy = if ($axis -eq 'Y') { $delta } else { 0 }
+                    $receiver.HoldAt($receiver.Handle,($origin+$dx),($origin+$dy),850)
+                    $after = [ReleaseReceiver]::CursorForWindow($window)
+                    $edges = $receiver.Edges -join ','
+                    if ($edges -notin '','LD,LU') { throw "Unexpected movement measurement edges [$edges]." }
+                    $receiver.Edges.Clear()
+                    [pscustomobject]@{Origin=$origin;Axis=$axis;PhysicalDelta=$delta;ObservedX=$after.X-$before.X;
+                        ObservedY=$after.Y-$before.Y;Edges=$edges;ToolbarDpi=[ReleaseReceiver]::GetDpiForWindow($window)}
+                }
+            }
+        }
+        $observations | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'motion.json')
+    }
     if ($CheckBoundaries) {
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'boundary baseline' 'LD,LU'
-        $receiver.HoldAt($receiver.Handle,4,4,1200)
+        $origin = [ReleaseReceiver]::CursorForWindow([IntPtr]::Zero)
+        $receiver.HoldReferencePoint($receiver.Handle,($origin.X+4),($origin.Y+4),1200)
         Check-Edges 'four pixels on both axes' ''
-        $receiver.HoldAt($receiver.Handle,8,8,1200)
+        $receiver.HoldReferencePoint($receiver.Handle,($origin.X+8),($origin.Y+8),1200)
         Check-Edges 'two four-pixel steps from the baseline' ''
-        $receiver.HoldAt($receiver.Handle,13,8,1200)
+        $receiver.HoldReferencePoint($receiver.Handle,($origin.X+13),($origin.Y+8),1200)
         Check-Edges 'five pixels on x' 'LD,LU'
-        $receiver.HoldAt($receiver.Handle,13,3,1200)
+        $receiver.HoldReferencePoint($receiver.Handle,($origin.X+13),($origin.Y+3),1200)
         Check-Edges 'minus five pixels on y' 'LD,LU'
-        $receiver.HoldAt($receiver.Handle,13,3,3000)
+        $receiver.HoldReferencePoint($receiver.Handle,($origin.X+13),($origin.Y+3),3000)
         Check-Edges 'stationary after dispatch' ''
         Select-Mode 'Pause' 1000
-        $anchor = [Windows.Forms.Cursor]::Position
+        $anchor = [ReleaseReceiver]::CursorForWindow([IntPtr]::Zero)
         $toggle = [ReleaseReceiver]::Button($window,'Resume',1000,$isReference)
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'off the paused toggle' ''
-        $receiver.HoldScreenPoint($toggle,($anchor.X + 1),$anchor.Y,1200)
+        $receiver.HoldReferencePoint($toggle,($anchor.X + 1),$anchor.Y,1200)
         Check-Edges 'one pixel on toggle' ''
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'one-pixel paused rearm stays latched' ''
-        $receiver.HoldScreenPoint($toggle,($anchor.X + 3),$anchor.Y,1200)
+        $receiver.HoldReferencePoint($toggle,($anchor.X + 3),$anchor.Y,1200)
         Check-Edges 'two further pixels on toggle' ''
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'two-pixel paused rearm resumes' 'LD,LU'

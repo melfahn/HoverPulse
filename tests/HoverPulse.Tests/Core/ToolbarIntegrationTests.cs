@@ -16,6 +16,39 @@ public class ToolbarIntegrationTests
     [Fact]
     public void PointerOnlySessionOnPrivateDesktop() => OnPrivateDesktop(RunSession);
 
+    [Fact]
+    public void ScreenPositionFindsTargetAndReferencePositionRearmsDwell() => OnPrivateDesktop(() =>
+    {
+        using var receiver = new Form { StartPosition = FormStartPosition.Manual, Bounds = new(35,260,240,160) };
+        receiver.Show();
+        var dir = Directory.CreateTempSubdirectory("hoverclick-coordinates-");
+        try
+        {
+            CursorSample? cursor = null;
+            List<uint> edges = [];
+            var clicks = new ClickSimulator((edge,_) => { edges.Add(edge); return true; }, _ => {});
+            using var form = new ToolbarWindow(new SettingsService(Path.Combine(dir.FullName,"settings.json")),
+                new AppSettings { ToolbarX=0,ToolbarY=0 }, clicks, () => cursor);
+            form.Show();
+            var physical = receiver.PointToScreen(new Point(40,50));
+            var toggle = form.Controls.OfType<Button>().Single(b => b.Text == "Pause");
+            var logical = toggle.PointToScreen(new Point(12,12));
+            void Hold(int physicalDelta, int logicalDelta, bool stable = true)
+            {
+                cursor = new(new(physical.X+physicalDelta,physical.Y),new(logical.X+logicalDelta,logical.Y),stable);
+                for (int tick = 0; tick < 6; tick++) { form.Tick(); }
+            }
+            Hold(0,0);
+            Hold(6,4);
+            Assert.Equal(new uint[] {2,4}, edges);
+            Hold(14,9,false);
+            Assert.Equal(new uint[] {2,4}, edges);
+            Hold(14,9);
+            Assert.Equal(new uint[] {2,4,2,4}, edges);
+        }
+        finally { dir.Delete(true); }
+    });
+
     internal static void OnPrivateDesktop(Action run)
     {
         string desktopName = "HoverPulseTests" + Guid.NewGuid().ToString("N");
@@ -55,7 +88,7 @@ public class ToolbarIntegrationTests
             List<uint> edges = [];
             POINT? cursor = default;
             var sender = new ClickSimulator((edge, _) => { edges.Add(edge); return true; }, _ => {});
-            using var form = new ToolbarWindow(store, settings, sender, () => cursor);
+            using var form = new ToolbarWindow(store, settings, sender, () => cursor is POINT p ? new CursorSample(p,p) : null);
             form.Show();
             Application.DoEvents();
 

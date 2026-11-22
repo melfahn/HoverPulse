@@ -17,7 +17,7 @@ internal sealed class ToolbarWindow : Form
     private readonly ActionSelection _selection = new();
     private readonly ClickSimulator _clicks;
     private readonly DragWorker? _dragWorker;
-    private readonly Func<POINT?> _cursor;
+    private readonly Func<CursorSample?> _cursor;
     private ToolbarPalette _palette = ToolbarPalette.For(ToolbarTheme.Neutral);
     private ToolbarButton? _feedback;
     private string? _lastToolbarTarget;
@@ -33,7 +33,7 @@ internal sealed class ToolbarWindow : Form
     private bool _deferredClose;
     private readonly Companion _companion = new();
 
-    public ToolbarWindow(SettingsService store, AppSettings settings, ClickSimulator? clicks = null, Func<POINT?>? cursor = null)
+    public ToolbarWindow(SettingsService store, AppSettings settings, ClickSimulator? clicks = null, Func<CursorSample?>? cursor = null)
     {
         _store = store;
         if (clicks == null)
@@ -42,7 +42,7 @@ internal sealed class ToolbarWindow : Form
             clicks = new ClickSimulator(ClickSimulator.NativeEdge, BetweenEdges, _dragWorker.Send);
         }
         _clicks = clicks;
-        _cursor = cursor ?? (() => NativeMethods.GetCursorPos(out var point) ? point : null);
+        _cursor = cursor ?? CursorSample.Read;
         _settings = settings;
         _selection.Restore(settings.DefaultAction);
         Text = "Hover Click";
@@ -277,12 +277,12 @@ internal sealed class ToolbarWindow : Form
 
     private void StartMove()
     {
-        if (_cursor() is not POINT point)
+        if (_cursor() is not { } sample)
         {
             return;
         }
 
-        _moveOffset = new Point(point.X - Left, point.Y - Top);
+        _moveOffset = new Point(sample.Screen.X - Left, sample.Screen.Y - Top);
         LayoutButtons();
     }
 
@@ -344,12 +344,13 @@ internal sealed class ToolbarWindow : Form
                     NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0, 0x13);
                 }
             }
-            if (_cursor() is not POINT p) { _detector.Reset(); _overlay?.Hide(); return; }
+            if (_cursor() is not { } sample) { _detector.Reset(); _overlay?.Hide(); return; }
+            var p = sample.Screen;
             if (_moveOffset is Point offset)
             {
                 Location = new Point(p.X - offset.X, p.Y - offset.Y);
                 KeepReachable();
-                if (_detector.Sample(p, false)) { _moveOffset = null; LayoutButtons(); Save(); }
+                if (_detector.Sample(sample.Dwell, false, sample.Stable)) { _moveOffset = null; LayoutButtons(); Save(); }
                 return;
             }
             var hwnd = NativeMethods.WindowFromPoint(p);
@@ -363,7 +364,7 @@ internal sealed class ToolbarWindow : Form
                 _detector.CancelPending();
             }
             if (!_detector.Paused) { _lastToolbarTarget = button?.AccessibleName; }
-            if (!_detector.Sample(p, onToggle, !owned || button != null))
+            if (!_detector.Sample(sample.Dwell, onToggle, sample.Stable && (!owned || button != null)))
             {
                 SetFeedback(button, _detector.Progress);
                 if (_settings.ShowIndicator && !owned && !_detector.Paused && _detector.Progress > 0)

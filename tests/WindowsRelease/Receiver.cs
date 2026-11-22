@@ -157,6 +157,34 @@ public sealed class ReleaseReceiver : Form
 
     public static void RestoreDpi(IntPtr previous) { SetThreadDpiAwarenessContext(previous); }
 
+    public static Point CursorForWindow(IntPtr window)
+    {
+        var previous = SetThreadDpiAwarenessContext(window == IntPtr.Zero ? new IntPtr(-1) : GetWindowDpiAwarenessContext(window));
+        if (previous == IntPtr.Zero) throw new InvalidOperationException("Could not match the toolbar DPI context.");
+        try
+        {
+            Point point;
+            if (!GetCursorPos(out point)) throw new InvalidOperationException("Cursor readback failed.");
+            return point;
+        }
+        finally { RestoreDpi(previous); }
+    }
+
+    public void HoldReferencePoint(IntPtr handle, int x, int y, int milliseconds)
+    {
+        var previous = SetThreadDpiAwarenessContext(new IntPtr(-1));
+        if (previous == IntPtr.Zero) throw new InvalidOperationException("Reference coordinate context unavailable.");
+        Point physical, logical;
+        try
+        {
+            if (WindowFromPoint(new Point(x,y)) != handle || !SetCursorPos(x,y) ||
+                !GetCursorPos(out logical) || logical.X != x || logical.Y != y || !GetPhysicalCursorPos(out physical))
+                throw new InvalidOperationException("Reference-space target or cursor readback differs.");
+        }
+        finally { RestoreDpi(previous); }
+        HoldScreenPoint(handle,physical.X,physical.Y,milliseconds);
+    }
+
     public static Rectangle ScreenBounds(IntPtr window)
     {
         RECT r;
@@ -203,6 +231,8 @@ public sealed class ReleaseReceiver : Form
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int l,t,r,b; }
     delegate bool Enumerate(IntPtr hwnd,IntPtr state);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);

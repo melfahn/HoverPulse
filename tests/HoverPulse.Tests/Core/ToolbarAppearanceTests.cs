@@ -58,7 +58,7 @@ public class ToolbarAppearanceTests
                 POINT? cursor = null;
                 var clicks = new ClickSimulator((f,_) => { edges.Add(f); return true; }, _ => {});
                 using var form = new ToolbarWindow(new SettingsService(Path.Combine(folder.FullName,"settings.json")),
-                    settings,clicks,()=>cursor);
+                    settings,clicks,()=>cursor is POINT p ? new CursorSample(p,p) : null);
                 form.Show();
                 Application.DoEvents();
                 ToolbarButton[] Buttons() => form.Controls.OfType<ToolbarButton>().ToArray();
