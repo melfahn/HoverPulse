@@ -1,6 +1,10 @@
 # NaturalPoint compatibility release status
 
-**Candidate built. Native release qualification pending.** The candidate is based on HoverPulse commit `2e760805be181148eb2a8b55151511e98ae76f77`. Self-contained Windows x64 and ARM64 builds succeeded. Their complete publish directories are under `artifacts/release`. SHA-256 for every published file is in `artifacts/verification/publish-manifest.json`.
+**The redesigned Hover Click candidate is undergoing native qualification.** Its application source is `016eece107f760ea6e442a857f3ebbdee83cf7aa`. Its self-contained Windows x64 executable has SHA-256 `459854BD3A16600AB7715C20533BC58BCFFA6ABA634858F22C44971D51CA989A`. Both x64 and ARM64 publish directories have individual file manifests. Release results below identify which binary was tested.
+
+The redesigned toolbar passed 23 isolated tests, including real Windows controls for all four sizes, three palettes and both label settings. The tests checked actual control bounds, inert gaps, saved padding, staged Setup and the anchored Resume target. The layout tests also checked 96 and 144 DPI. The earlier native measurements below belong to the previous build.
+
+The previous x64 build (`3F78BA7A…6455`) completed 336 full native endurance cycles before the receiver missed the drop after Resume in the next cycle. The run ended after 4,334 seconds. The last trace shows a drag-down and then a 6.4-second interval before the pointer moved to Pause. The cause is unresolved. This was a failed endurance run. Subsequent qualification captures the toolbar, pointer and Windows button state before cleanup when any phase fails.
 
 | Evidence | Result |
 |---|---|
@@ -28,7 +32,7 @@ In one matched four-run comparison the first edge reached the receiver 386–450
 
 ## Guest procedure
 
-Use separate clean snapshots of the same disposable, interactive Windows guest. Copy the complete candidate publish directory, the signed reference executable and the two files under `tests/WindowsRelease`. Run the PowerShell test within the guest for the reference and then the candidate, for each backend. Provide the verified guest hostname to `-DisposableGuestName`, `-Product Reference` or `Candidate`, the matching `-Executable` and a fresh `-OutputDirectory`. Add `-Alternate` for SendInput. The runner creates the corresponding test-user profile and refuses to overwrite an existing one. It checks target visibility, records button edges at the receiving window and writes a receipt on completion or failure.
+Use separate clean snapshots of the same disposable, interactive Windows guest. Copy the complete candidate publish directory, the signed reference executable and the receiver and PowerShell scripts under `tests/WindowsRelease`. Run the PowerShell test within the guest for the reference and then the candidate, for each backend. Provide the verified guest hostname to `-DisposableGuestName`, `-Product Reference` or `Candidate`, the matching `-Executable` and a fresh `-OutputDirectory`. Add `-Alternate` for SendInput. The runner creates the corresponding test-user profile and refuses to overwrite an existing one. It checks target visibility, records button edges at the receiving window and writes a receipt on completion or failure.
 
 Compare event order, target-relative coordinates and inter-edge intervals in the two event logs. Compare timing distributions across repeated runs at the same DPI, refresh and desktop load. Run the candidate with `-SoakHours 8` in an uninterrupted guest console after differential smoke passes. The accelerated detector test measures logical coverage only. Repeat on supported platforms and retain guest, architecture, DPI, Windows build and profiles alongside receipts.
 

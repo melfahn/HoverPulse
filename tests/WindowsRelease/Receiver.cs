@@ -90,6 +90,17 @@ public sealed class ReleaseReceiver : Form
         return found;
     }
 
+    public static string[] VisibleLabels(IntPtr window)
+    {
+        var labels = new List<string>();
+        EnumChildWindows(window, delegate(IntPtr child, IntPtr state)
+        {
+            if (IsWindowVisible(child)) labels.Add(ReadText(child));
+            return true;
+        }, IntPtr.Zero);
+        return labels.ToArray();
+    }
+
     public static string ReadText(IntPtr window)
     {
         var text = new StringBuilder(200);

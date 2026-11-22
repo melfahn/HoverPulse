@@ -227,6 +227,24 @@ try {
     }
     $passed = $true
 }
+catch {
+    $failure = $_
+    $detail = [ordered]@{Error=$failure.Exception.Message; Cycle=$cycles; Utc=[datetime]::UtcNow.ToString('o')}
+    try {
+        $detail.WindowsLeftDown = [ReleaseReceiver]::LeftDown()
+        $detail.Pointer = [Windows.Forms.Cursor]::Position.ToString()
+        if ($app -and !$app.HasExited -and $window) {
+            $detail.ToolbarDpi = [ReleaseReceiver]::GetDpiForWindow($window)
+            $detail.ToolbarBounds = [ReleaseReceiver]::ScreenBounds($window).ToString()
+            if (!$isReference) { $detail.VisibleControls = [ReleaseReceiver]::VisibleLabels($window) }
+            $bitmap = [ReleaseReceiver]::CaptureWindow($window)
+            try { $bitmap.Save((Join-Path $out 'failure-toolbar.png'),[Drawing.Imaging.ImageFormat]::Png) }
+            finally { $bitmap.Dispose() }
+        }
+    } catch { $detail.InspectionError = $_.Exception.Message }
+    $detail | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $out 'failure-state.json')
+    throw $failure
+}
 finally {
     if ($app -and !$app.HasExited) {
         if ($window) { [ReleaseReceiver]::CloseToolbar($window,$app.Id) }
