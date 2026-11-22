@@ -95,7 +95,8 @@ if ($isReference) {
             ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
     }
 }
-$previousDpi = if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval -or $RestoreDesignProfile) { [ReleaseReceiver]::EnterPerMonitorDpi() }
+# Boundary offsets and logged target coordinates are physical pixels in every suite.
+$previousDpi = [ReleaseReceiver]::EnterPerMonitorDpi()
 $receiver = New-Object ReleaseReceiver
 if ($CheckDesign -or $CheckMixedDpi -or $CheckMonitorRemoval) {
     $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None

@@ -58,6 +58,9 @@ public sealed class ReleaseReceiver : Form
         Trace.Add(String.Format("{0:F3} sample-target {1} {2} {3}", clock.Elapsed.TotalMilliseconds,handle,x,y));
         double start = clock.Elapsed.TotalMilliseconds;
         if (!SetCursorPos(x,y)) throw new Exception("Failed to position test pointer");
+        Point physical;
+        if (!GetPhysicalCursorPos(out physical) || physical.X != x || physical.Y != y)
+            throw new InvalidOperationException("Test pointer differs from the requested physical screen point.");
         Pump(milliseconds);
         double elapsed = clock.Elapsed.TotalMilliseconds - start;
         if (elapsed - milliseconds >= 250)
@@ -217,4 +220,5 @@ public sealed class ReleaseReceiver : Form
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr w,out RECT rect);
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+    [DllImport("user32.dll")] static extern bool GetPhysicalCursorPos(out Point point);
 }
