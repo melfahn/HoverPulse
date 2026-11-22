@@ -11,6 +11,7 @@ public sealed class ReleaseReceiver : Form
     public readonly List<string> Edges = new List<string>();
     public readonly List<string> Trace = new List<string>();
     public readonly List<int> SessionEvents = new List<int>();
+    public readonly List<string> DelayedHolds = new List<string>();
     readonly Stopwatch clock = Stopwatch.StartNew();
     public ReleaseReceiver()
     {
@@ -55,8 +56,15 @@ public sealed class ReleaseReceiver : Form
     {
         if (WindowFromPoint(new Point(x,y)) != handle) throw new Exception("Target is occluded");
         Trace.Add(String.Format("{0:F3} sample-target {1} {2} {3}", clock.Elapsed.TotalMilliseconds,handle,x,y));
+        double start = clock.Elapsed.TotalMilliseconds;
         if (!SetCursorPos(x,y)) throw new Exception("Failed to position test pointer");
         Pump(milliseconds);
+        double elapsed = clock.Elapsed.TotalMilliseconds - start;
+        if (elapsed - milliseconds >= 250)
+        {
+            DelayedHolds.Add(String.Format("at {0:F3} ms, target {1},{2}, requested {3} ms, observed {4:F3} ms",
+                start,x,y,milliseconds,elapsed));
+        }
     }
 
     public static void Pump(int ms)

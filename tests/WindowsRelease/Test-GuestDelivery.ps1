@@ -150,6 +150,12 @@ try {
         if ($cycles -eq 1 -or $cycles % 10 -eq 0) {
             @{Cycles=$cycles; ElapsedSeconds=$endurance.Elapsed.TotalSeconds; Utc=[DateTime]::UtcNow.ToString('o')} |
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
+            if ($SoakHours -gt 0) {
+                $app.Refresh()
+                [pscustomobject]@{Cycle=$cycles;Handles=$app.HandleCount;PrivateBytes=$app.PrivateMemorySize64;
+                    CpuSeconds=$app.TotalProcessorTime.TotalSeconds;DelayedHolds=$receiver.DelayedHolds.Count} |
+                    Export-Csv -NoTypeInformation -Append -LiteralPath (Join-Path $out 'resource-samples.csv')
+            }
         }
     } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
     if ($CheckBoundaries) {
@@ -289,6 +295,7 @@ finally {
         if (!$app.WaitForExit(2500)) { $app.Kill(); $app.WaitForExit() }
     }
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)
+    if ($receiver.DelayedHolds.Count) { $receiver.DelayedHolds | Set-Content -LiteralPath (Join-Path $out 'delayed-holds.txt') }
     @{ Product=$Product; SHA256=$hash; Passed=$passed; Host=$computer.Name; Model=$computer.Model;
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5; DragHoldMilliseconds=$DragHoldMilliseconds;
