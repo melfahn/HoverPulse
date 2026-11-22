@@ -9,10 +9,14 @@
 | Action delivery | Recording backend verified both dispatch paths, ordering, pacing requests, short-write recovery, reentry suppression and drag ownership. |
 | Windows UI | A separate thread attached to a newly created, undisplayed Windows desktop. Real controls and synthetic samples exercised toolbar selection, pause during drag, hands-free resume and drop, options cancel/apply, moving the toolbar and confirmed quit. A companion test window verified registration, acknowledgment and quit notification. Synthetic session messages exercised lock, unlock, resume and display-change handling. |
 | Settings | Version-one backup and migration, correct false and zero values, negative coordinates, range validation, future-version rejection and recovery from a corrupt primary passed. |
-| Native comparison | Guest receiver compiled under Windows PowerShell. Runner parsed. Native event delivery, real timer jitter and time-to-click distributions have yet to be measured. |
-| Environment and endurance | Actual sleep, lock/unlock, RDP reconnect, multiple monitors/DPI, restricted targets, duplicate launch, forced termination with a held button, ARM64 execution and the eight-hour elapsed-time soak remain open. |
+| Native comparison | On Windows 11 x64 build 26200, the signed reference and candidate each passed the right, default-left, double, drag, pause, resume and drop sequence on both native backends. The receiver saw the same ten button edges at the same coordinates in all four runs. One cycle per configuration establishes ordering and target delivery. |
+| Environment and endurance | Actual sleep, lock/unlock, RDP reconnect, multiple monitors/DPI, restricted targets, ARM64 execution and the eight-hour elapsed-time soak remain open. |
 
 The normalized tick trace uses an explicit first sample as its baseline. Runtime startup phase, modal behavior, toolbar geometry, float behavior and companion communication should be checked against the pinned NaturalPoint build in the guest. The candidate uses Windows Forms controls and keeps its own settings. A clean candidate profile starts with the captured reference settings.
+
+## Process lifetime checks
+
+A duplicate candidate exited with status 1 and the original continued on both backends. Orderly exit during a drag delivered exactly one left-up and cleared the Windows left-button state. Forced termination of the original candidate and of the reference during a legacy drag left the button held. The test receiver measured that state before cleaning it up. Use `-CheckOrderlyExit` on the candidate or `-CheckForcedExit` on either product to reproduce these checks in a reserved test login.
 
 ## Guest procedure
 

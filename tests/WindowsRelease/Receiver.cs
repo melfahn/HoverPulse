@@ -104,8 +104,27 @@ public sealed class ReleaseReceiver : Form
         if (owner == pid) PostMessageW(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
     }
 
+    public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
+
+    public void ReleaseTestDrag()
+    {
+        if (WindowFromPoint(Cursor.Position) != Handle) throw new InvalidOperationException("Recovery target is occluded.");
+        mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+        Pump(200);
+        if (LeftDown()) throw new InvalidOperationException("The test button is still held.");
+    }
+
+    public static void KeepAwake(bool enable)
+    {
+        uint flags = enable ? 0x80000003u : 0x80000000u;
+        if (SetThreadExecutionState(flags) == 0) throw new InvalidOperationException("Could not set the test power request.");
+    }
+
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int l,t,r,b; }
     delegate bool Enumerate(IntPtr hwnd,IntPtr state);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+    [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint flags);
     [DllImport("user32.dll")] static extern bool EnumWindows(Enumerate callback, IntPtr state);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr w, out uint pid);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr w, StringBuilder text, int capacity);

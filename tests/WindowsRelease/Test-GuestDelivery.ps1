@@ -8,6 +8,8 @@ param(
     [Parameter(Mandatory)][string]$Executable,
     [Parameter(Mandatory)][string]$OutputDirectory,
     [switch]$Alternate,
+    [switch]$CheckOrderlyExit,
+    [switch]$CheckForcedExit,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -49,6 +51,8 @@ if (Get-Process -Name DwellClicker,HoverPulse -ErrorAction SilentlyContinue | Wh
 $exe = Get-Item -LiteralPath $Executable
 $hash = (Get-FileHash -LiteralPath $exe.FullName).Hash
 $isReference = $Product -eq 'Reference'
+if ($CheckOrderlyExit -and $isReference) { throw 'The duplicate-instance exit code is a candidate-only contract.' }
+if ($CheckOrderlyExit -and $CheckForcedExit) { throw 'Select one exit test per run.' }
 if ($isReference -and $hash -ne 'CB8D235299FFAB67C950DC6D96B00CBD269C0691B43CADE368C7735F5B95CA15') {
     throw 'Reference hash mismatch.'
 }
@@ -74,9 +78,11 @@ if ($isReference) {
 $receiver = New-Object ReleaseReceiver
 $app = $null
 $passed = $false
+$heldAfterKill = $null
 $cycles = 0
 $timer = [Diagnostics.Stopwatch]::StartNew()
 try {
+    if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($true) }
     $receiver.Show()
     $receiver.Hold($receiver.Handle,-48,100)
     $app = Start-Process -FilePath $exe.FullName -PassThru
@@ -126,6 +132,37 @@ try {
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
         }
     } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
+    if ($CheckOrderlyExit) {
+        $duplicate = Start-Process -FilePath $exe.FullName -PassThru
+        try {
+            if (!$duplicate.WaitForExit(5000) -or $duplicate.ExitCode -ne 1) {
+                throw 'The second candidate instance did not exit with its single-instance status.'
+            }
+        } finally {
+            if (!$duplicate.HasExited) { $duplicate.Kill(); $duplicate.WaitForExit() }
+            $duplicate.Dispose()
+        }
+        if ($app.HasExited) { throw 'Launching a second instance closed the first instance.' }
+        Check-Edges 'launch second instance' ''
+    }
+    if ($CheckOrderlyExit -or $CheckForcedExit) {
+        Select-Mode 'Drag' 1002
+        $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'start drag before exit' 'LD'
+        if (![ReleaseReceiver]::LeftDown()) { throw 'The drag did not hold the Windows left button.' }
+        if ($CheckForcedExit) { $app.Kill() } else { [ReleaseReceiver]::CloseToolbar($window,$app.Id) }
+        if (!$app.WaitForExit(5000)) { throw 'Process exit timed out.' }
+        [ReleaseReceiver]::Pump(200)
+        if ($CheckForcedExit) {
+            $heldAfterKill = [ReleaseReceiver]::LeftDown()
+            if ($heldAfterKill) {
+                $receiver.ReleaseTestDrag()
+                throw 'Forced termination left the Windows button held. The receiver released the test drag.'
+            }
+        }
+        Check-Edges 'exit with drag held' 'LU'
+        if ([ReleaseReceiver]::LeftDown()) { throw 'Windows still reports a held left button after exit.' }
+    }
     $passed = $true
 }
 finally {
@@ -136,7 +173,10 @@ finally {
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)
     @{ Product=$Product; SHA256=$hash; Passed=$passed; Host=$computer.Name; Model=$computer.Model;
        Windows=[Environment]::OSVersion.VersionString; BackendAlternate=$Alternate.IsPresent;
-       Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5 } |
+       Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5;
+       CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
+       LeftDownAfterKill=$heldAfterKill } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     $receiver.Dispose()
+    if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($false) }
 }
