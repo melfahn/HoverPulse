@@ -2,6 +2,8 @@
 
 **The current x64 candidate is `640722a`, SHA-256 `C1CA014CE3B0DD79F39878F817F9F5D7C3DB7CF5B5BBC983E48D6428D2959EF2`.** Cancelling a staged Bedroom profile reset now restores the toolbar position where Setup opened. The regression reproduced a 980-pixel jump on the previous build. All 24 isolated Windows tests passed after the fix. Native presentation qualification now checks the actual toolbar bounds after Move, Setup, Bedroom profile and Cancel.
 
+The same application source also passed on a real Windows 11 ARM64 runner (build 26200) and a Windows Server x64 runner (build 26100). Each ran all 24 isolated tests and delivered the expected receiver events on both input backends. Forced termination of the toolbar released the held drag and cleared the Windows left-button state in all four native runs. The retained ARM64 bundle has executable SHA-256 `0D19D9BAE04795A2FFF7E0C341613575F93F64E30F4CFC0C2A89FE43FC95E726`. The independently built hosted x64 executable was `DEE700B4EB14950F4682551CB2B47AD1939DB2014118BB90AA30E1522B9FB4D9`. [Windows release checks and receipts](https://github.com/melfahn/HoverPulse/actions/runs/45060632776)
+
 ## Previous candidate under endurance test
 
 Build `caa0e23`, x64 SHA-256 `A2D5942B2926AD4EEABCD9DE30315FC06119951E2BF2A045462BD400A40D404B`, samples the cursor in NaturalPoint's DPI-unaware coordinate space and uses the physical cursor for toolbar targets. All 24 isolated tests passed before the profile-reset regression was added. The Windows x64 and ARM64 publish directories have per-file manifests.
@@ -30,7 +32,7 @@ The previous x64 build (`3F78BA7A…6455`) completed 336 full native endurance c
 | Windows UI | A separate thread attached to a newly created, undisplayed Windows desktop. Real controls and synthetic samples exercised toolbar selection, pause during drag, hands-free resume and drop, options cancel/apply, moving the toolbar and confirmed quit. A companion test window verified registration, acknowledgment and quit notification. Synthetic session messages exercised lock, unlock, resume and display-change handling. |
 | Settings | Version-one backup and migration, correct false and zero values, negative coordinates, range validation, future-version rejection and recovery from a corrupt primary passed. |
 | Native comparison | On Windows 11 x64 build 26200, the signed reference and candidate each passed the right, default-left, double, drag, pause, resume and drop sequence on both native backends. The receiver saw the same ten button edges at the same coordinates in all four runs. One cycle per configuration establishes ordering and target delivery. |
-| Environment and endurance | This earlier baseline did not complete endurance. See the current candidate results above for display, sleep, lock, reconnect and restricted-input coverage. ARM64 has been cross-published and has no runtime pass. |
+| Environment and endurance | This earlier baseline did not complete endurance. The exact candidate results above identify display, sleep, lock, reconnect, restricted-input and native ARM64 coverage. |
 
 The normalized tick trace uses an explicit first sample as its baseline. Runtime timing, modal behavior, float behavior and companion communication can be compared against the pinned NaturalPoint build in the reserved login. The candidate uses Windows Forms controls and keeps its own settings. A clean candidate profile starts with the captured reference settings.
 
