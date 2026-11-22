@@ -26,9 +26,17 @@ if ($DedicatedTestAccount) {
     # A protected user may keep their original logon disconnected during the test.
     # Never take input in their logon or reuse their per-user settings.
     $protected = @(Get-CimInstance Win32_Process -Filter "Name='mstsc.exe' OR Name='DwellClicker.exe'")
+    $reservedSid = if ($hostRules.TestAccountSids) { $hostRules.TestAccountSids[$computer.Name] }
+    if ($reservedSid -and $identity.User.Value -ne $reservedSid) {
+        throw 'Test login SID does not match the reserved account.'
+    }
     foreach ($proc in $protected) {
+        if ($proc.SessionId -eq $session) { throw 'The test session contains an active RDP client or clicker.' }
+        # Limited users cannot resolve process owners in other logons.
+        # The administrator may pin the SID of a separate, dedicated test account.
+        if ($reservedSid) { continue }
         $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwnerSid
-        if ($owner.ReturnValue -ne 0 -or !$owner.Sid -or $owner.Sid -eq $identity.User.Value -or $proc.SessionId -eq $session) {
+        if ($owner.ReturnValue -ne 0 -or !$owner.Sid -or $owner.Sid -eq $identity.User.Value) {
             throw 'Test login isolation could not be verified.'
         }
     }
@@ -72,41 +80,57 @@ try {
     $receiver.Show()
     $receiver.Hold($receiver.Handle,-48,100)
     $app = Start-Process -FilePath $exe.FullName -PassThru
+    $startup = [Diagnostics.Stopwatch]::StartNew()
     do {
         $app.Refresh()
-        if ($app.HasExited -or $timer.Elapsed.TotalSeconds -gt 20) { throw 'Toolbar startup failed' }
+        if ($app.HasExited) { throw "Toolbar exited during startup with code $($app.ExitCode)." }
+        if ($startup.Elapsed.TotalSeconds -gt 30) { throw 'Timed out waiting for the visible toolbar.' }
         [ReleaseReceiver]::Pump(100)
-    } until ($app.MainWindowHandle -ne 0)
-    $window = $app.MainWindowHandle
+        $window = if ($isReference) { $app.MainWindowHandle } else { [ReleaseReceiver]::CandidateToolbar($app.Id) }
+    } until ($window -ne 0)
+    function Check-Edges([string]$Phase,[string]$Expected) {
+        $actual = $receiver.Edges -join ','
+        if ($actual -ne $Expected) { throw "Cycle $cycles, ${Phase}: expected [$Expected], received [$actual]." }
+        $receiver.Edges.Clear()
+    }
     function Select-Mode([string]$Label,[int]$Id,[int]$Offset = 0) {
         $button = [ReleaseReceiver]::Button($window,$Label,$Id,$isReference)
         $receiver.Hold($button,$Offset,1100)
+        Check-Edges $Label ''
     }
     # Prime the first position. Ignore only this startup interval.
     $receiver.Hold($receiver.Handle,-48,1200)
     $receiver.Edges.Clear()
+    $endurance = [Diagnostics.Stopwatch]::StartNew()
     do {
         Select-Mode 'Right' 1003
         $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'right click' 'RD,RU'
         $receiver.Hold($receiver.Handle,30,1200)
+        Check-Edges 'restore left default' 'LD,LU'
         Select-Mode 'Double' 1001
         $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'double click' 'LD,LU,LD,LU'
         Select-Mode 'Drag' 1002
         $receiver.Hold($receiver.Handle,30,1200)
+        Check-Edges 'start drag' 'LD'
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
+        Check-Edges 'paused dwell during drag' ''
         Select-Mode 'Resume' 1000 4
         $receiver.Hold($receiver.Handle,30,1200)
-        $expected = 'RD,RU,LD,LU,LD,LU,LD,LU,LD,LU'
-        if (($receiver.Edges -join ',') -ne $expected) { throw "Mismatch in cycle $cycles. Received $($receiver.Edges -join ',')" }
-        $receiver.Edges.Clear()
+        Check-Edges 'drop after resume' 'LU'
         $cycles++
-    } while ($timer.Elapsed.TotalHours -lt $SoakHours)
+        if ($cycles -eq 1 -or $cycles % 10 -eq 0) {
+            @{Cycles=$cycles; ElapsedSeconds=$endurance.Elapsed.TotalSeconds; Utc=[DateTime]::UtcNow.ToString('o')} |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'progress.json')
+        }
+    } while ($endurance.Elapsed.TotalHours -lt $SoakHours)
     $passed = $true
 }
 finally {
     if ($app -and !$app.HasExited) {
-        $null = $app.CloseMainWindow()
+        if ($window) { [ReleaseReceiver]::CloseToolbar($window,$app.Id) }
         if (!$app.WaitForExit(2500)) { $app.Kill(); $app.WaitForExit() }
     }
     $receiver.Trace | Set-Content -LiteralPath (Join-Path $out events.txt)

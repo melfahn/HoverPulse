@@ -80,8 +80,36 @@ public sealed class ReleaseReceiver : Form
         return found;
     }
 
+    public static IntPtr CandidateToolbar(int pid)
+    {
+        IntPtr result = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr window, IntPtr state)
+        {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner != pid || !IsWindowVisible(window)) return true;
+            var title = new StringBuilder(64);
+            GetWindowTextW(window, title, title.Capacity);
+            if (title.ToString() != "HoverPulse") return true;
+            result = window;
+            return false;
+        }, IntPtr.Zero);
+        return result;
+    }
+
+    public static void CloseToolbar(IntPtr window, int pid)
+    {
+        uint owner;
+        GetWindowThreadProcessId(window, out owner);
+        if (owner == pid) PostMessageW(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
+    }
+
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int l,t,r,b; }
     delegate bool Enumerate(IntPtr hwnd,IntPtr state);
+    [DllImport("user32.dll")] static extern bool EnumWindows(Enumerate callback, IntPtr state);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr w, out uint pid);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr w, StringBuilder text, int capacity);
+    [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr w, uint message, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window,Enumerate callback,IntPtr state);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeoutW(
         IntPtr window, uint message, UIntPtr capacity, [Out] StringBuilder text,
