@@ -2,6 +2,8 @@
 
 ## Contents
 
+- [Hover Click toolbar](hover-click-toolbar.md) specifies the approved appearance and presentation tests.
+
 - [NaturalPoint parity specification](naturalpoint-parity.md) and [sample cases](naturalpoint-sample-cases.json) govern the compatibility release.
 
 - `requirements.md` — v1.0 feature specification (dwell detection, click types, overlay, toolbar, etc.)

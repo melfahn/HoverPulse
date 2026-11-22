@@ -245,7 +245,12 @@ internal sealed class ToolbarWindow : Form
             LayoutButtons();
             Save();
         });
-        Add("Cancel", () => { _draft = null; LayoutButtons(); });
+        Add("Cancel", () =>
+        {
+            _draft = null;
+            Location = new Point(draft.ToolbarX, draft.ToolbarY);
+            LayoutButtons();
+        });
     }
 
     private void ApplySettings()

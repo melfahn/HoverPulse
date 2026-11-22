@@ -90,6 +90,15 @@ public sealed class ReleaseReceiver : Form
         return found;
     }
 
+    public static string ReadText(IntPtr window)
+    {
+        var text = new StringBuilder(200);
+        UIntPtr copied;
+        if (SendMessageTimeoutW(window, 0x000D, (UIntPtr)text.Capacity, text, 2, 250, out copied) == IntPtr.Zero)
+            throw new InvalidOperationException("Control text unavailable");
+        return text.ToString();
+    }
+
     public static IntPtr CandidateToolbar(int pid)
     {
         IntPtr result = IntPtr.Zero;
@@ -115,6 +124,38 @@ public sealed class ReleaseReceiver : Form
         if (owner == pid) PostMessageW(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
     }
 
+    public static IntPtr EnterPerMonitorDpi()
+    {
+        var previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
+        if (previous == IntPtr.Zero) throw new InvalidOperationException("Per-monitor DPI context unavailable.");
+        return previous;
+    }
+
+    public static void RestoreDpi(IntPtr previous) { SetThreadDpiAwarenessContext(previous); }
+
+    public static Rectangle ScreenBounds(IntPtr window)
+    {
+        RECT r;
+        if (!IsWindowVisible(window) || !GetWindowRect(window, out r)) throw new InvalidOperationException("Missing window bounds.");
+        return Rectangle.FromLTRB(r.l,r.t,r.r,r.b);
+    }
+
+    public static void CheckHit(IntPtr window, int x, int y)
+    {
+        if (WindowFromPoint(new Point(x,y)) != window) throw new InvalidOperationException("Unexpected window at " + x + "," + y);
+    }
+
+    public static Bitmap CaptureWindow(IntPtr window)
+    {
+        var bounds = ScreenBounds(window);
+        var bitmap = new Bitmap(bounds.Width,bounds.Height);
+        using (var g=Graphics.FromImage(bitmap))
+        {
+            g.CopyFromScreen(bounds.Location,Point.Empty,bounds.Size);
+        }
+        return bitmap;
+    }
+
     public static bool LeftDown() { return (GetAsyncKeyState(1) & 0x8000) != 0; }
 
     public void ReleaseTestDrag()
@@ -133,6 +174,8 @@ public sealed class ReleaseReceiver : Form
 
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int l,t,r,b; }
     delegate bool Enumerate(IntPtr hwnd,IntPtr state);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
     [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint flags);

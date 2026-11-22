@@ -12,6 +12,8 @@ param(
     [switch]$CheckForcedExit,
     [switch]$CheckReconnect,
     [switch]$CheckBoundaries,
+    [switch]$CheckDesign,
+    [ValidateRange(0,768)][int]$ExpectedDpi = 0,
     [ValidateRange(0,48)][double]$SoakHours = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -77,7 +79,12 @@ if ($isReference) {
     @{SchemaVersion=2;ClickTime=2;MoveLimit=5;AlternateInput=$Alternate.IsPresent;ToolbarX=0;ToolbarY=24} |
         ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8
 }
+$previousDpi = if ($CheckDesign) { [ReleaseReceiver]::EnterPerMonitorDpi() }
 $receiver = New-Object ReleaseReceiver
+if ($CheckDesign) {
+    $receiver.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
+    $receiver.Bounds = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+}
 $app = $null
 $passed = $false
 $heldAfterKill = $null
@@ -161,6 +168,11 @@ try {
         $receiver.Hold($receiver.Handle,0,1200)
         Check-Edges 'two-pixel paused rearm resumes' 'LD,LU'
     }
+    if ($CheckDesign) {
+        if ($isReference) { throw 'Design checks require the Hover Click candidate.' }
+        & (Join-Path $PSScriptRoot Test-ToolbarPresentation.ps1) -Window $window -Receiver $receiver -OutputDirectory $out -ExpectedDpi $ExpectedDpi
+        Check-Edges 'internal design and Setup actions' ''
+    }
     if ($CheckReconnect) {
         Select-Mode 'Pause' 1000
         $receiver.Hold($receiver.Handle,0,1200)
@@ -222,8 +234,9 @@ finally {
        Cycles=$cycles; ElapsedSeconds=$timer.Elapsed.TotalSeconds; ClickTime=2; MoveLimit=5;
        CheckedOrderlyExit=$CheckOrderlyExit.IsPresent; CheckedForcedExit=$CheckForcedExit.IsPresent;
        LeftDownAfterKill=$heldAfterKill; CheckedReconnect=$CheckReconnect.IsPresent;
-       CheckedBoundaries=$CheckBoundaries.IsPresent } |
+       CheckedBoundaries=$CheckBoundaries.IsPresent; CheckedDesign=$CheckDesign.IsPresent } |
         ConvertTo-Json | Set-Content -LiteralPath $receipt
     $receiver.Dispose()
+    if ($previousDpi) { [ReleaseReceiver]::RestoreDpi($previousDpi) }
     if ($SoakHours -gt 0) { [ReleaseReceiver]::KeepAwake($false) }
 }

@@ -62,9 +62,10 @@ internal sealed class ToolbarButton : Button
         if (Icon != Glyph.None)
         {
             float labelHeight = ShowLabel ? Font.Height + 3*scale : 0;
-            float symbol = Math.Min(Width * (toggle ? .40f : .52f), (Height-labelHeight)*.63f);
+            float badgeSpace = ShowLabel ? 6*scale : 0;
+            float symbol = Math.Min(Width * (toggle ? .40f : .52f), (Height-labelHeight-badgeSpace)*.63f);
             var state = g.Save();
-            g.TranslateTransform((Width-symbol)/2, (Height-labelHeight-symbol)/2);
+            g.TranslateTransform((Width-symbol)/2, badgeSpace+(Height-labelHeight-badgeSpace-symbol)/2);
             g.ScaleTransform(symbol/32f,symbol/32f);
             DrawIcon(g, Icon, ink, fill);
             g.Restore(state);
